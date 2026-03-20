@@ -20,11 +20,12 @@ function extractImageNames(jsonData) {
 		if (!slots || typeof slots !== "object") continue;
 		for (const slotName in slots) {
 			const atts = slots[slotName];
-			for (const attName in atts) {
-				const att = atts[attName];
+			for (const attKey in atts) {
+				const att = atts[attKey];
 				const type = att.type || "region";
-				if (type === "region" || type === "mesh" || type === "linkedmesh" || type === "weightedmesh") {
-					imageNames.add(att.path || attName);
+				if (type === "region" || type === "mesh" || type === "linkedmesh" || type === "weightedmesh" || type === "skinnedmesh") {
+					const name = att.name || attKey;
+					imageNames.add(att.path || name);
 				}
 			}
 		}
@@ -35,24 +36,47 @@ function extractImageNames(jsonData) {
 function findImageFile(imgName, fileURLs) {
 	const extensions = [".png", ".jpg", ".jpeg", ".webp"];
 	const baseName = imgName.split("/").pop();
+	// exact match with extension
 	for (const ext of extensions) {
 		if (fileURLs[imgName + ext]) return { url: fileURLs[imgName + ext], fileName: imgName + ext };
 	}
+	// exact match as-is
 	if (fileURLs[imgName]) return { url: fileURLs[imgName], fileName: imgName };
+	// case-insensitive full path
 	for (const ext of extensions) {
 		const target = (imgName + ext).toLowerCase();
 		for (const key in fileURLs) {
 			if (key.toLowerCase() === target) return { url: fileURLs[key], fileName: key };
 		}
 	}
+	// case-insensitive basename only
 	for (const ext of extensions) {
 		const target = (baseName + ext).toLowerCase();
 		for (const key in fileURLs) {
 			if (key.split("/").pop().toLowerCase() === target) return { url: fileURLs[key], fileName: key };
 		}
 	}
+	// basename without extension match
+	const targetBase = baseName.toLowerCase();
+	for (const key in fileURLs) {
+		const keyBase = key.split("/").pop().toLowerCase().replace(/\.[^.]+$/, "");
+		if (keyBase === targetBase) return { url: fileURLs[key], fileName: key };
+	}
+	// endsWith match (handles folder prefixes like "images/subfolder/name")
+	for (const ext of extensions) {
+		const suffix = ("/" + imgName + ext).toLowerCase();
+		for (const key in fileURLs) {
+			if (("/" + key).toLowerCase().endsWith(suffix)) return { url: fileURLs[key], fileName: key };
+		}
+	}
 	return null;
 }
+
+const PLACEHOLDER_URL = (() => {
+	const c = document.createElement("canvas");
+	c.width = 2; c.height = 2;
+	return c.toDataURL();
+})();
 
 function generateAtlasFromImages(jsonData, fileURLs) {
 	return new Promise((resolve, reject) => {
@@ -69,25 +93,50 @@ function generateAtlasFromImages(jsonData, fileURLs) {
 				reject(new Error("Could not load any referenced images"));
 				return;
 			}
+			// group regions by fileName (multiple regions can share the same image file)
+			const pages = new Map();
+			for (const e of entries) {
+				if (!pages.has(e.fileName)) pages.set(e.fileName, { width: e.width, height: e.height, regions: [] });
+				pages.get(e.fileName).regions.push(e);
+			}
 			let atlas = "";
-			for (let i = 0; i < entries.length; i++) {
-				const e = entries[i];
-				if (i > 0) atlas += "\n";
-				atlas += `${e.fileName}\nsize: ${e.width},${e.height}\nformat: RGBA8888\nfilter: Linear,Linear\nrepeat: none\n`;
-				atlas += `${e.regionName}\n  rotate: false\n  xy: 0, 0\n  size: ${e.width}, ${e.height}\n  orig: ${e.width}, ${e.height}\n  offset: 0, 0\n  index: -1\n`;
+			let first = true;
+			for (const [fileName, page] of pages) {
+				if (!first) atlas += "\n";
+				first = false;
+				atlas += `${fileName}\nsize: ${page.width},${page.height}\nformat: RGBA8888\nfilter: Linear,Linear\nrepeat: none\n`;
+				for (const r of page.regions) {
+					atlas += `${r.regionName}\n  rotate: false\n  xy: 0, 0\n  size: ${r.width}, ${r.height}\n  orig: ${r.width}, ${r.height}\n  offset: 0, 0\n  index: -1\n`;
+				}
 			}
 			resolve(atlas);
 		};
 		for (const imgName of imageNames) {
 			const match = findImageFile(imgName, fileURLs);
-			if (!match) { pending--; checkDone(); continue; }
+			if (!match) {
+				// create placeholder so region still exists in atlas
+				console.warn("Image not found for region:", imgName, "— using placeholder");
+				const placeholderKey = "__placeholder_" + imgName + ".png";
+				fileURLs[placeholderKey] = PLACEHOLDER_URL;
+				entries.push({ regionName: imgName, fileName: placeholderKey, width: 2, height: 2 });
+				pending--;
+				checkDone();
+				continue;
+			}
 			const img = new Image();
 			img.onload = () => {
 				entries.push({ regionName: imgName, fileName: match.fileName, width: img.naturalWidth, height: img.naturalHeight });
 				pending--;
 				checkDone();
 			};
-			img.onerror = () => { pending--; checkDone(); };
+			img.onerror = () => {
+				console.warn("Failed to load image for region:", imgName, "— using placeholder");
+				const placeholderKey = "__placeholder_" + imgName + ".png";
+				fileURLs[placeholderKey] = PLACEHOLDER_URL;
+				entries.push({ regionName: imgName, fileName: placeholderKey, width: 2, height: 2 });
+				pending--;
+				checkDone();
+			};
 			img.src = match.url;
 		}
 	});
@@ -497,7 +546,13 @@ function App() {
 
 	const onFolderInputChange = useCallback(
 		(event) => {
-			const files = Array.from(event.target.files);
+			const rawFiles = Array.from(event.target.files);
+			const files = rawFiles.map((f) => {
+				if (f.webkitRelativePath) {
+					return new File([f], f.webkitRelativePath, { type: f.type });
+				}
+				return f;
+			});
 			if (files.length > 0) loadFiles(files);
 			event.target.value = "";
 		},
@@ -719,10 +774,11 @@ function App() {
 		try {
 			const spineAtlas = new TextureAtlas(modifiedAtlasText, (line, callback) => {
 				const texture = getTextureForLine(line, fileURLs);
-				if (texture) callback(texture);
-				else {
-					console.error("Texture not found for line:", line);
-					callback(null);
+				if (texture) {
+					callback(texture);
+				} else {
+					console.warn("Texture not found for page:", line, "— using placeholder");
+					callback(BaseTexture.from(PLACEHOLDER_URL));
 				}
 			});
 			const atlasLoader = new AtlasAttachmentLoader(spineAtlas);
