@@ -433,9 +433,53 @@ function App() {
 		};
 	}, [updateSpinePosition]);
 
+	const readEntryRecursive = (entry) => {
+		return new Promise((resolve) => {
+			if (entry.isFile) {
+				entry.file((file) => {
+					const path = entry.fullPath.replace(/^\//, "");
+					const namedFile = new File([file], path, { type: file.type });
+					resolve([namedFile]);
+				}, () => resolve([]));
+			} else if (entry.isDirectory) {
+				const reader = entry.createReader();
+				const allEntries = [];
+				const readBatch = () => {
+					reader.readEntries((entries) => {
+						if (entries.length === 0) {
+							Promise.all(allEntries.map(readEntryRecursive)).then((results) => resolve(results.flat()));
+						} else {
+							allEntries.push(...entries);
+							readBatch();
+						}
+					}, () => resolve([]));
+				};
+				readBatch();
+			} else {
+				resolve([]);
+			}
+		});
+	};
+
 	const onDrop = useCallback(
-		(event) => {
+		async (event) => {
 			event.preventDefault();
+			const items = event.dataTransfer.items;
+			if (items && items.length > 0) {
+				const entries = [];
+				for (let i = 0; i < items.length; i++) {
+					const entry = items[i].webkitGetAsEntry?.() || items[i].getAsEntry?.();
+					if (entry) entries.push(entry);
+				}
+				if (entries.length > 0) {
+					const allFiles = await Promise.all(entries.map(readEntryRecursive));
+					const files = allFiles.flat();
+					if (files.length > 0) {
+						loadFiles(files);
+						return;
+					}
+				}
+			}
 			loadFiles(event.dataTransfer.files);
 		},
 		[loadFiles]
@@ -444,6 +488,17 @@ function App() {
 	const onFileInputChange = useCallback(
 		(event) => {
 			loadFiles(event.target.files);
+			event.target.value = "";
+		},
+		[loadFiles]
+	);
+
+	const folderInputRef = useRef(null);
+
+	const onFolderInputChange = useCallback(
+		(event) => {
+			const files = Array.from(event.target.files);
+			if (files.length > 0) loadFiles(files);
 			event.target.value = "";
 		},
 		[loadFiles]
@@ -654,6 +709,10 @@ function App() {
 			const lowerLine = line.toLowerCase();
 			for (const key in fileURLs) {
 				if (key.toLowerCase() === lowerLine) return BaseTexture.from(fileURLs[key]);
+			}
+			const baseLine = lowerLine.split("/").pop();
+			for (const key in fileURLs) {
+				if (key.split("/").pop().toLowerCase() === baseLine) return BaseTexture.from(fileURLs[key]);
 			}
 			return null;
 		}
@@ -965,9 +1024,17 @@ function App() {
 				ref={fileInputRef}
 				type="file"
 				multiple
-				accept=".json,.atlas,.png,.jpg,.jpeg"
+				accept=".json,.atlas,.png,.jpg,.jpeg,.webp"
 				style={{ display: "none" }}
 				onChange={onFileInputChange}
+			/>
+			<input
+				ref={folderInputRef}
+				type="file"
+				webkitdirectory=""
+				directory=""
+				style={{ display: "none" }}
+				onChange={onFolderInputChange}
 			/>
 			<header style={styles.header}>
 				<div style={styles.headerLeft}>Pixi Spine Viewer Tool</div>
@@ -1086,28 +1153,35 @@ function App() {
 						{!spineLoaded && (
 							<div style={styles.dropOverlay}>
 								<p style={styles.dropText}>
-									Drag and drop Spine files here
+									Drag and drop Spine files or folder here
 								</p>
 								<p style={{ ...styles.dropText, fontSize: "10px", marginTop: "4px", opacity: 0.7 }}>
 									JSON + Atlas + Images or JSON + Images
 								</p>
 								<p style={{ ...styles.dropText, fontSize: "11px", marginTop: "4px" }}>or</p>
-								<button style={styles.openFileButton} onClick={() => fileInputRef.current?.click()}>
-									Open Files
-								</button>
-
+								<div style={{ display: "flex", gap: "8px" }}>
+									<button style={styles.openFileButton} onClick={() => fileInputRef.current?.click()}>
+										Open Files
+									</button>
+									<button style={styles.openFileButton} onClick={() => folderInputRef.current?.click()}>
+										Open Folder
+									</button>
+								</div>
 							</div>
 						)}
 						<div ref={pixiContainerRef} style={styles.pixiContainer} />
 						{spineLoaded && (						<div style={styles.fpsCounter}>{fps} FPS</div>
 					)}
 					{spineLoaded && (							<div style={styles.canvasControls}>
-								<button style={styles.canvasPauseButton} onClick={toggleAnimation} title={animationPlaying ? "Pause" : "Play"}>
-									{animationPlaying ? "⏸" : "▶"}
-								</button>
-								<button style={styles.openFileButton} onClick={() => fileInputRef.current?.click()} title="Open Files">
-									📂
-								</button>
+							<button style={styles.canvasPauseButton} onClick={toggleAnimation} title={animationPlaying ? "Pause" : "Play"}>
+								{animationPlaying ? "⏸" : "▶"}
+							</button>
+							<button style={styles.openFileButton} onClick={() => fileInputRef.current?.click()} title="Open Files">
+								📂
+							</button>
+							<button style={styles.openFileButton} onClick={() => folderInputRef.current?.click()} title="Open Folder">
+								📁
+							</button>
 
 								<label style={styles.bonesCheckboxLabel}>
 									<input
