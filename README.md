@@ -14,7 +14,7 @@ Pixi Spine Viewer Tool is a web application for previewing and interacting with 
 Clone the repository and install dependencies:
 
 ```sh
-git clone https://github.com/Vladnzh/pixi-spine-viewer.git
+git clone https://github.com/Nonamezzz322/pixi-spine-viewer.git
 cd pixi-spine-viewer
 ```
 
