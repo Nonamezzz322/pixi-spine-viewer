@@ -8,6 +8,91 @@ function modifyAtlasText(atlasText, fileURLs) {
 	return atlasText;
 }
 
+function extractImageNames(jsonData) {
+	const imageNames = new Set();
+	const skins = jsonData.skins;
+	if (!skins) return imageNames;
+	const skinList = Array.isArray(skins)
+		? skins
+		: Object.keys(skins).map((k) => ({ attachments: skins[k] }));
+	for (const skin of skinList) {
+		const slots = skin.attachments;
+		if (!slots || typeof slots !== "object") continue;
+		for (const slotName in slots) {
+			const atts = slots[slotName];
+			for (const attName in atts) {
+				const att = atts[attName];
+				const type = att.type || "region";
+				if (type === "region" || type === "mesh" || type === "linkedmesh" || type === "weightedmesh") {
+					imageNames.add(att.path || attName);
+				}
+			}
+		}
+	}
+	return imageNames;
+}
+
+function findImageFile(imgName, fileURLs) {
+	const extensions = [".png", ".jpg", ".jpeg", ".webp"];
+	const baseName = imgName.split("/").pop();
+	for (const ext of extensions) {
+		if (fileURLs[imgName + ext]) return { url: fileURLs[imgName + ext], fileName: imgName + ext };
+	}
+	if (fileURLs[imgName]) return { url: fileURLs[imgName], fileName: imgName };
+	for (const ext of extensions) {
+		const target = (imgName + ext).toLowerCase();
+		for (const key in fileURLs) {
+			if (key.toLowerCase() === target) return { url: fileURLs[key], fileName: key };
+		}
+	}
+	for (const ext of extensions) {
+		const target = (baseName + ext).toLowerCase();
+		for (const key in fileURLs) {
+			if (key.split("/").pop().toLowerCase() === target) return { url: fileURLs[key], fileName: key };
+		}
+	}
+	return null;
+}
+
+function generateAtlasFromImages(jsonData, fileURLs) {
+	return new Promise((resolve, reject) => {
+		const imageNames = extractImageNames(jsonData);
+		if (imageNames.size === 0) {
+			reject(new Error("No image references found in JSON"));
+			return;
+		}
+		const entries = [];
+		let pending = imageNames.size;
+		const checkDone = () => {
+			if (pending > 0) return;
+			if (entries.length === 0) {
+				reject(new Error("Could not load any referenced images"));
+				return;
+			}
+			let atlas = "";
+			for (let i = 0; i < entries.length; i++) {
+				const e = entries[i];
+				if (i > 0) atlas += "\n";
+				atlas += `${e.fileName}\nsize: ${e.width},${e.height}\nformat: RGBA8888\nfilter: Linear,Linear\nrepeat: none\n`;
+				atlas += `${e.regionName}\n  rotate: false\n  xy: 0, 0\n  size: ${e.width}, ${e.height}\n  orig: ${e.width}, ${e.height}\n  offset: 0, 0\n  index: -1\n`;
+			}
+			resolve(atlas);
+		};
+		for (const imgName of imageNames) {
+			const match = findImageFile(imgName, fileURLs);
+			if (!match) { pending--; checkDone(); continue; }
+			const img = new Image();
+			img.onload = () => {
+				entries.push({ regionName: imgName, fileName: match.fileName, width: img.naturalWidth, height: img.naturalHeight });
+				pending--;
+				checkDone();
+			};
+			img.onerror = () => { pending--; checkDone(); };
+			img.src = match.url;
+		}
+	});
+}
+
 function App() {
 	const [spineLoaded, setSpineLoaded] = useState(false);
 	const [animationPlaying, setAnimationPlaying] = useState(false);
@@ -260,48 +345,64 @@ function App() {
 				if (lower.endsWith(".json")) jsonFileName = name;
 				else if (lower.endsWith(".atlas")) atlasFileName = name;
 			}
-			if (!jsonFileName || !atlasFileName) {
-				setErrorMsg("Required files (JSON and ATLAS) not found");
+			if (!jsonFileName) {
+				setErrorMsg("JSON file not found");
 				return;
 			}
-			const readerJSON = new FileReader();
-			const readerAtlas = new FileReader();
-			let jsonText = "";
-			let atlasText = "";
-			readerJSON.onload = (e) => {
-				jsonText = e.target.result;
-				if (atlasText) {
+			if (atlasFileName) {
+				const readerJSON = new FileReader();
+				const readerAtlas = new FileReader();
+				let jsonText = "";
+				let atlasText = "";
+				readerJSON.onload = (e) => {
+					jsonText = e.target.result;
+					if (atlasText) {
+						try {
+							const jsonData = JSON.parse(jsonText);
+							createSpineAnimation(jsonData, atlasText, fileURLs);
+						} catch (err) {
+							console.error("Error parsing JSON file:", err);
+							setErrorMsg("Error parsing JSON file: " + err.message);
+						}
+					}
+				};
+				readerJSON.onerror = (err) => {
+					console.error("Error reading JSON file:", err);
+					setErrorMsg("Error reading JSON file");
+				};
+				readerAtlas.onload = (e) => {
+					atlasText = e.target.result;
+					if (jsonText) {
+						try {
+							const jsonData = JSON.parse(jsonText);
+							createSpineAnimation(jsonData, atlasText, fileURLs);
+						} catch (err) {
+							console.error("Error parsing JSON file:", err);
+							setErrorMsg("Error parsing JSON file: " + err.message);
+						}
+					}
+				};
+				readerAtlas.onerror = (err) => {
+					console.error("Error reading ATLAS file:", err);
+					setErrorMsg("Error reading ATLAS file");
+				};
+				readerJSON.readAsText(filesMap[jsonFileName]);
+				readerAtlas.readAsText(filesMap[atlasFileName]);
+			} else {
+				const readerJSON = new FileReader();
+				readerJSON.onload = async (e) => {
 					try {
-						const jsonData = JSON.parse(jsonText);
+						const jsonData = JSON.parse(e.target.result);
+						const atlasText = await generateAtlasFromImages(jsonData, fileURLs);
 						createSpineAnimation(jsonData, atlasText, fileURLs);
 					} catch (err) {
-						console.error("Error parsing JSON file:", err);
-						setErrorMsg("Error parsing JSON file: " + err.message);
+						console.error("Error loading spine from images:", err);
+						setErrorMsg("Error: " + err.message);
 					}
-				}
-			};
-			readerJSON.onerror = (err) => {
-				console.error("Error reading JSON file:", err);
-				setErrorMsg("Error reading JSON file");
-			};
-			readerAtlas.onload = (e) => {
-				atlasText = e.target.result;
-				if (jsonText) {
-					try {
-						const jsonData = JSON.parse(jsonText);
-						createSpineAnimation(jsonData, atlasText, fileURLs);
-					} catch (err) {
-						console.error("Error parsing JSON file:", err);
-						setErrorMsg("Error parsing JSON file: " + err.message);
-					}
-				}
-			};
-			readerAtlas.onerror = (err) => {
-				console.error("Error reading ATLAS file:", err);
-				setErrorMsg("Error reading ATLAS file");
-			};
-			readerJSON.readAsText(filesMap[jsonFileName]);
-			readerAtlas.readAsText(filesMap[atlasFileName]);
+				};
+				readerJSON.onerror = () => setErrorMsg("Error reading JSON file");
+				readerJSON.readAsText(filesMap[jsonFileName]);
+			}
 		},
 		[updateSpinePosition]
 	);
@@ -986,6 +1087,9 @@ function App() {
 							<div style={styles.dropOverlay}>
 								<p style={styles.dropText}>
 									Drag and drop Spine files here
+								</p>
+								<p style={{ ...styles.dropText, fontSize: "10px", marginTop: "4px", opacity: 0.7 }}>
+									JSON + Atlas + Images or JSON + Images
 								</p>
 								<p style={{ ...styles.dropText, fontSize: "11px", marginTop: "4px" }}>or</p>
 								<button style={styles.openFileButton} onClick={() => fileInputRef.current?.click()}>
