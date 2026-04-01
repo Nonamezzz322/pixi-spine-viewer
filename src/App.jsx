@@ -999,7 +999,7 @@ function App() {
 		const animName = availableAnimations[0];
 		spineInstanceRef.current.state.setAnimation(nextIndex, animName, true);
 		spineInstanceRef.current.state.timeScale = speedValue;
-		setAdditionalTracks((prev) => [...prev, { trackIndex: nextIndex, animation: animName, loop: true, alpha: 1.0 }]);
+		setAdditionalTracks((prev) => [...prev, { trackIndex: nextIndex, animation: animName, loop: true, alpha: 1.0, mixDuration: 0 }]);
 	};
 
 	const removeTrack = (trackIndex) => {
@@ -1015,7 +1015,11 @@ function App() {
 		const loop = track ? track.loop : true;
 		const entry = spineInstanceRef.current.state.setAnimation(trackIndex, animName, loop);
 		const alpha = track ? track.alpha : 1.0;
-		if (entry) entry.alpha = alpha;
+		const mixDur = track ? track.mixDuration : 0;
+		if (entry) {
+			entry.alpha = alpha;
+			entry.mixDuration = mixDur;
+		}
 		spineInstanceRef.current.state.timeScale = speedValue;
 		setAdditionalTracks((prev) => prev.map((t) => t.trackIndex === trackIndex ? { ...t, animation: animName } : t));
 	};
@@ -1038,6 +1042,14 @@ function App() {
 			if (current) current.alpha = alpha;
 		}
 		setAdditionalTracks((prev) => prev.map((t) => t.trackIndex === trackIndex ? { ...t, alpha } : t));
+	};
+
+	const updateTrackMixDuration = (trackIndex, mixDuration) => {
+		if (spineInstanceRef.current) {
+			const current = spineInstanceRef.current.state.getCurrent(trackIndex);
+			if (current) current.mixDuration = mixDuration;
+		}
+		setAdditionalTracks((prev) => prev.map((t) => t.trackIndex === trackIndex ? { ...t, mixDuration } : t));
 	};
 
 	const handleSlotVisibilityChange = (slotName, visible) => {
@@ -1388,6 +1400,19 @@ function App() {
 												style={{ flex: 1 }}
 											/>
 											<span style={styles.trackAlphaValue}>{track.alpha.toFixed(2)}</span>
+										</div>
+										<div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+											<span style={styles.trackAlphaLabel}>Mix</span>
+											<input
+												type="range"
+												min="0"
+												max="2"
+												step="0.01"
+												value={track.mixDuration}
+												onChange={(e) => updateTrackMixDuration(track.trackIndex, parseFloat(e.target.value))}
+												style={{ flex: 1 }}
+											/>
+											<span style={styles.trackAlphaValue}>{track.mixDuration.toFixed(2)}s</span>
 										</div>
 									</div>
 								))}
