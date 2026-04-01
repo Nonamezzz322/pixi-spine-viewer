@@ -543,6 +543,33 @@ export const getStyles = (theme) => {
 			width: `${scaleFactor * 42}px`,
 			textAlign: "right",
 			flexShrink: 0
+		},
+		trackItem: {
+			border: `1px solid ${currentTheme.inputBorder}`,
+			borderRadius: `${scaleFactor * 4}px`,
+			padding: `${scaleFactor * 6}px`,
+			marginBottom: `${scaleFactor * 4}px`
+		},
+		trackItemHeader: {
+			display: "flex",
+			alignItems: "center",
+			justifyContent: "space-between",
+			marginBottom: `${scaleFactor * 2}px`
+		},
+		trackLabel: {
+			fontSize: `${scaleFactor * 12}px`,
+			fontWeight: "bold"
+		},
+		trackAlphaLabel: {
+			fontSize: `${scaleFactor * 11}px`,
+			flexShrink: 0
+		},
+		trackAlphaValue: {
+			fontSize: `${scaleFactor * 11}px`,
+			fontFamily: "monospace",
+			width: `${scaleFactor * 30}px`,
+			textAlign: "right",
+			flexShrink: 0
 		}
 	};
 };

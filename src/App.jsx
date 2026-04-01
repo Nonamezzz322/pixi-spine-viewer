@@ -178,6 +178,7 @@ function App() {
 	const [trimStart, setTrimStart] = useState(0);
 	const [trimEnd, setTrimEnd] = useState(0);
 	const [trimEnabled, setTrimEnabled] = useState(false);
+	const [additionalTracks, setAdditionalTracks] = useState([]);
 
 	const pixiContainerRef = useRef(null);
 	const pixiAppRef = useRef(null);
@@ -346,6 +347,7 @@ function App() {
 			animationQueueRef.current = [];
 			setQueueIndex(-1);
 			queueIndexRef.current = -1;
+			setAdditionalTracks([]);
 			setBoneNames([]);
 			setSelectedBones(new Set());
 			selectedBonesRef.current = new Set();
@@ -989,6 +991,55 @@ function App() {
 		setTrimEnabled(next);
 	};
 
+	const addTrack = () => {
+		if (!spineInstanceRef.current || availableAnimations.length === 0) return;
+		const usedIndices = additionalTracks.map((t) => t.trackIndex);
+		let nextIndex = 1;
+		while (usedIndices.includes(nextIndex)) nextIndex++;
+		const animName = availableAnimations[0];
+		spineInstanceRef.current.state.setAnimation(nextIndex, animName, true);
+		spineInstanceRef.current.state.timeScale = speedValue;
+		setAdditionalTracks((prev) => [...prev, { trackIndex: nextIndex, animation: animName, loop: true, alpha: 1.0 }]);
+	};
+
+	const removeTrack = (trackIndex) => {
+		if (spineInstanceRef.current) {
+			spineInstanceRef.current.state.clearTrack(trackIndex);
+		}
+		setAdditionalTracks((prev) => prev.filter((t) => t.trackIndex !== trackIndex));
+	};
+
+	const updateTrackAnimation = (trackIndex, animName) => {
+		if (!spineInstanceRef.current) return;
+		const track = additionalTracks.find((t) => t.trackIndex === trackIndex);
+		const loop = track ? track.loop : true;
+		const entry = spineInstanceRef.current.state.setAnimation(trackIndex, animName, loop);
+		const alpha = track ? track.alpha : 1.0;
+		if (entry) entry.alpha = alpha;
+		spineInstanceRef.current.state.timeScale = speedValue;
+		setAdditionalTracks((prev) => prev.map((t) => t.trackIndex === trackIndex ? { ...t, animation: animName } : t));
+	};
+
+	const toggleTrackLoop = (trackIndex) => {
+		setAdditionalTracks((prev) => prev.map((t) => {
+			if (t.trackIndex !== trackIndex) return t;
+			const newLoop = !t.loop;
+			if (spineInstanceRef.current) {
+				const current = spineInstanceRef.current.state.getCurrent(trackIndex);
+				if (current) current.loop = newLoop;
+			}
+			return { ...t, loop: newLoop };
+		}));
+	};
+
+	const updateTrackAlpha = (trackIndex, alpha) => {
+		if (spineInstanceRef.current) {
+			const current = spineInstanceRef.current.state.getCurrent(trackIndex);
+			if (current) current.alpha = alpha;
+		}
+		setAdditionalTracks((prev) => prev.map((t) => t.trackIndex === trackIndex ? { ...t, alpha } : t));
+	};
+
 	const handleSlotVisibilityChange = (slotName, visible) => {
 		if (attachedCirclesRef.current[slotName]) {
 			attachedCirclesRef.current[slotName].visible = visible;
@@ -1295,6 +1346,51 @@ function App() {
 										<option key={idx} value={animName}>{animName}</option>
 									))}
 								</select>
+							</div>
+						)}
+						{availableAnimations.length > 0 && (
+							<div style={styles.queueSection}>
+								<div style={styles.queueHeader}>
+									<span style={styles.sliderLabel}>Tracks</span>
+									<button style={styles.queueClearButton} onClick={addTrack}>+ Add</button>
+								</div>
+								{additionalTracks.map((track) => (
+									<div key={track.trackIndex} style={styles.trackItem}>
+										<div style={styles.trackItemHeader}>
+											<span style={styles.trackLabel}>Track {track.trackIndex}</span>
+											<div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+												<button
+													style={{ ...styles.queueClearButton, color: track.loop ? "#4caf50" : styles.queueClearButton.color }}
+													onClick={() => toggleTrackLoop(track.trackIndex)}
+													title="Toggle loop"
+												>⟳</button>
+												<button style={styles.queueRemoveButton} onClick={() => removeTrack(track.trackIndex)}>×</button>
+											</div>
+										</div>
+										<select
+											style={{ ...styles.animationsSelect, marginTop: "2px", marginBottom: "2px" }}
+											value={track.animation}
+											onChange={(e) => updateTrackAnimation(track.trackIndex, e.target.value)}
+										>
+											{availableAnimations.map((animName, idx) => (
+												<option key={idx} value={animName}>{animName}</option>
+											))}
+										</select>
+										<div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+											<span style={styles.trackAlphaLabel}>Alpha</span>
+											<input
+												type="range"
+												min="0"
+												max="1"
+												step="0.01"
+												value={track.alpha}
+												onChange={(e) => updateTrackAlpha(track.trackIndex, parseFloat(e.target.value))}
+												style={{ flex: 1 }}
+											/>
+											<span style={styles.trackAlphaValue}>{track.alpha.toFixed(2)}</span>
+										</div>
+									</div>
+								))}
 							</div>
 						)}
 						{availableSkins.length > 1 && (
