@@ -8,6 +8,18 @@ function modifyAtlasText(atlasText, fileURLs) {
 	return atlasText;
 }
 
+function expandSequencePath(basePath, seq) {
+	const count = seq.count || 0;
+	const digits = seq.digits || 0;
+	const start = seq.start !== undefined ? seq.start : 1;
+	const paths = [];
+	for (let i = 0; i < count; i++) {
+		const frame = String(start + i);
+		paths.push(basePath + "0".repeat(Math.max(0, digits - frame.length)) + frame);
+	}
+	return paths;
+}
+
 function extractImageNames(jsonData) {
 	const imageNames = new Set();
 	const skins = jsonData.skins;
@@ -25,7 +37,14 @@ function extractImageNames(jsonData) {
 				const type = att.type || "region";
 				if (type === "region" || type === "mesh" || type === "linkedmesh" || type === "weightedmesh" || type === "skinnedmesh") {
 					const name = att.name || attKey;
-					imageNames.add(att.path || name);
+					const path = att.path || name;
+					if (att.sequence) {
+						for (const framePath of expandSequencePath(path, att.sequence)) {
+							imageNames.add(framePath);
+						}
+					} else {
+						imageNames.add(path);
+					}
 				}
 			}
 		}
@@ -85,6 +104,7 @@ function generateAtlasFromImages(jsonData, fileURLs) {
 			reject(new Error("No image references found in JSON"));
 			return;
 		}
+		console.log(`[SpineViewer] generateAtlasFromImages: ${imageNames.size} images to load`);
 		const entries = [];
 		let pending = imageNames.size;
 		const checkDone = () => {
@@ -93,6 +113,7 @@ function generateAtlasFromImages(jsonData, fileURLs) {
 				reject(new Error("Could not load any referenced images"));
 				return;
 			}
+			console.log(`[SpineViewer] All ${entries.length} images loaded, generating atlas`);
 			// group regions by fileName (multiple regions can share the same image file)
 			const pages = new Map();
 			for (const e of entries) {
@@ -774,95 +795,165 @@ function App() {
 			return null;
 		}
 		try {
+			const pageTextures = [];
 			const spineAtlas = new TextureAtlas(modifiedAtlasText, (line, callback) => {
 				const texture = getTextureForLine(line, fileURLs);
 				if (texture) {
+					pageTextures.push(texture);
 					callback(texture);
 				} else {
 					console.warn("Texture not found for page:", line, "— using placeholder");
-					callback(BaseTexture.from(PLACEHOLDER_URL));
+					const ph = BaseTexture.from(PLACEHOLDER_URL);
+					pageTextures.push(ph);
+					callback(ph);
 				}
 			});
-			const atlasLoader = new AtlasAttachmentLoader(spineAtlas);
-			const skeletonJson = new SkeletonJson(atlasLoader);
-			const skeletonData = skeletonJson.readSkeletonData(jsonData);
-			const skins = skeletonData.skins.map((skin) => skin.name);
-			setAvailableSkins(skins);
-			setSelectedSkin(skins[0] || "");
-			const spineAnimation = new Spine(skeletonData);
-			spineAnimation.skeleton.updateWorldTransform();
-			const bounds = spineAnimation.getLocalBounds();
-			spineAnimation.pivot.set(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-			spineAnimation.x = pixiAppRef.current.screen.width / 2;
-			spineAnimation.y = pixiAppRef.current.screen.height / 2;
-			spineAnimation.scale.set(scaleValue);
-			spineInstanceRef.current = spineAnimation;
-			pixiAppRef.current.stage.addChild(spineAnimation);
-			if (skeletonData.animations.length > 0) {
-				const animName = skeletonData.animations[0].name;
-				spineAnimation.state.setAnimation(0, animName, true);
-				setAnimationPlaying(true);
-				setAvailableAnimations(skeletonData.animations.map((anim) => anim.name));
-				setSelectedAnimation(animName);
-				spineAnimation.state.timeScale = speedValue;
-				const dur = skeletonData.findAnimation(animName)?.duration || 0;
-				setAnimDuration(dur);
-				setTrimStart(0);
-				setTrimEnd(dur);
-				trimStartRef.current = 0;
-				trimEndRef.current = dur;
-				setTrimEnabled(false);
-				trimEnabledRef.current = false;
-			}
-			const names = skeletonData.bones.map((b) => b.name);
-			setBoneNames(names);
-			const entities = { regionAttachments: [], meshes: [], paths: [], boundingBoxes: [], clipping: [] };
-			const seen = new Set();
-			for (const skin of skeletonData.skins) {
-				if (skin.attachments) {
-					for (let si = 0; si < skin.attachments.length; si++) {
-						const slotAtts = skin.attachments[si];
-						if (!slotAtts) continue;
-						const slotName = skeletonData.slots[si] ? skeletonData.slots[si].name : `slot_${si}`;
-						for (const attName in slotAtts) {
-							const att = slotAtts[attName];
-							const key = `${slotName}/${attName}`;
-							if (seen.has(key)) continue;
-							seen.add(key);
-							if (att.type === 0) entities.regionAttachments.push(key);
-							else if (att.type === 1) entities.boundingBoxes.push(key);
-							else if (att.type === 2) entities.meshes.push(key);
-							else if (att.type === 4) entities.paths.push(key);
-							else if (att.type === 6) entities.clipping.push(key);
+
+			const pendingTextures = pageTextures.filter((t) => !t.valid);
+			console.log(`[SpineViewer] Atlas: ${spineAtlas.pages.length} pages, ${spineAtlas.regions.length} regions, ${pendingTextures.length} pending textures`);
+			const finishSetup = () => { try {
+				console.log("[SpineViewer] finishSetup started");
+				const atlasLoader = new AtlasAttachmentLoader(spineAtlas);
+				const skeletonJson = new SkeletonJson(atlasLoader);
+				const skeletonData = skeletonJson.readSkeletonData(jsonData);
+
+				// Pre-set region for sequence attachments so Spine constructor
+				// can create meshes with valid textures
+				for (const skin of skeletonData.skins) {
+					if (skin.attachments) {
+						for (let si = 0; si < skin.attachments.length; si++) {
+							const slotAtts = skin.attachments[si];
+							if (!slotAtts) continue;
+							for (const attName in slotAtts) {
+								const att = slotAtts[attName];
+								if (att && att.sequence && !att.region) {
+									att.region = att.sequence.regions[att.sequence.setupIndex];
+								}
+							}
 						}
 					}
 				}
-			}
-			setDebugEntities(entities);
-			spineAnimation.state.addListener({
-				complete: () => {
-					const queue = animationQueueRef.current;
-					if (queue.length === 0) return;
-					const nextIdx = queueIndexRef.current + 1;
-					if (nextIdx < queue.length) {
-						queueIndexRef.current = nextIdx;
-						setQueueIndex(nextIdx);
-						setSelectedAnimation(queue[nextIdx]);
-						const isLast = nextIdx === queue.length - 1;
-						spineAnimation.state.setAnimation(0, queue[nextIdx], isLast && !queueLoopRef.current);
-					} else if (queueLoopRef.current) {
-						queueIndexRef.current = 0;
-						setQueueIndex(0);
-						setSelectedAnimation(queue[0]);
-						spineAnimation.state.setAnimation(0, queue[0], false);
-					} else {
-						queueIndexRef.current = -1;
-						setQueueIndex(-1);
+
+				const skins = skeletonData.skins.map((skin) => skin.name);
+				setAvailableSkins(skins);
+				setSelectedSkin(skins[0] || "");
+				const spineAnimation = new Spine(skeletonData);
+
+				// Patch setMeshRegion to guard against null textures
+				const origSetMeshRegion = spineAnimation.setMeshRegion.bind(spineAnimation);
+				spineAnimation.setMeshRegion = (attachment, mesh, region) => {
+					if (!region || !region.texture) return;
+					origSetMeshRegion(attachment, mesh, region);
+				};
+
+				spineAnimation.autoUpdate = false;
+				spineAnimation.x = pixiAppRef.current.screen.width / 2;
+				spineAnimation.y = pixiAppRef.current.screen.height / 2;
+				spineAnimation.scale.set(scaleValue);
+				spineInstanceRef.current = spineAnimation;
+				pixiAppRef.current.stage.addChild(spineAnimation);
+				if (skeletonData.animations.length > 0) {
+					const animName = skeletonData.animations[0].name;
+					spineAnimation.state.setAnimation(0, animName, true);
+					setAnimationPlaying(true);
+					setAvailableAnimations(skeletonData.animations.map((anim) => anim.name));
+					setSelectedAnimation(animName);
+					spineAnimation.state.timeScale = speedValue;
+					const dur = skeletonData.findAnimation(animName)?.duration || 0;
+					setAnimDuration(dur);
+					setTrimStart(0);
+					setTrimEnd(dur);
+					trimStartRef.current = 0;
+					trimEndRef.current = dur;
+					setTrimEnabled(false);
+					trimEnabledRef.current = false;
+				}
+				spineAnimation.autoUpdate = true;
+				requestAnimationFrame(() => {
+					try {
+						spineAnimation.skeleton.updateWorldTransform();
+						const bounds = spineAnimation.getLocalBounds();
+						spineAnimation.pivot.set(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+					} catch (e) {
+						console.warn("Deferred bounds calculation failed, using fallback positioning:", e);
+					}
+					updateSpinePosition();
+				});
+				const names = skeletonData.bones.map((b) => b.name);
+				setBoneNames(names);
+				const entities = { regionAttachments: [], meshes: [], paths: [], boundingBoxes: [], clipping: [] };
+				const seen = new Set();
+				for (const skin of skeletonData.skins) {
+					if (skin.attachments) {
+						for (let si = 0; si < skin.attachments.length; si++) {
+							const slotAtts = skin.attachments[si];
+							if (!slotAtts) continue;
+							const slotName = skeletonData.slots[si] ? skeletonData.slots[si].name : `slot_${si}`;
+							for (const attName in slotAtts) {
+								const att = slotAtts[attName];
+								const key = `${slotName}/${attName}`;
+								if (seen.has(key)) continue;
+								seen.add(key);
+								if (att.type === 0) entities.regionAttachments.push(key);
+								else if (att.type === 1) entities.boundingBoxes.push(key);
+								else if (att.type === 2) entities.meshes.push(key);
+								else if (att.type === 4) entities.paths.push(key);
+								else if (att.type === 6) entities.clipping.push(key);
+							}
+						}
 					}
 				}
-			});
-			setSpineLoaded(true);
-			updateSpinePosition();
+				setDebugEntities(entities);
+				spineAnimation.state.addListener({
+					complete: () => {
+						const queue = animationQueueRef.current;
+						if (queue.length === 0) return;
+						const nextIdx = queueIndexRef.current + 1;
+						if (nextIdx < queue.length) {
+							queueIndexRef.current = nextIdx;
+							setQueueIndex(nextIdx);
+							setSelectedAnimation(queue[nextIdx]);
+							const isLast = nextIdx === queue.length - 1;
+							spineAnimation.state.setAnimation(0, queue[nextIdx], isLast && !queueLoopRef.current);
+						} else if (queueLoopRef.current) {
+							queueIndexRef.current = 0;
+							setQueueIndex(0);
+							setSelectedAnimation(queue[0]);
+							spineAnimation.state.setAnimation(0, queue[0], false);
+						} else {
+							queueIndexRef.current = -1;
+							setQueueIndex(-1);
+						}
+					}
+				});
+				setSpineLoaded(true);
+			} catch (err) {
+				console.error("Error in finishSetup:", err);
+				setErrorMsg("Error creating Spine animation: " + err.message);
+			} };
+
+			if (pendingTextures.length > 0) {
+				let loaded = 0;
+				const onLoaded = () => {
+					loaded++;
+					if (loaded >= pendingTextures.length) {
+						finishSetup();
+					}
+				};
+				for (const tex of pendingTextures) {
+					if (tex.valid) {
+						loaded++;
+					} else {
+						tex.once("loaded", onLoaded);
+						tex.once("error", onLoaded);
+					}
+				}
+				if (loaded >= pendingTextures.length) {
+					finishSetup();
+				}
+			} else {
+				finishSetup();
+			}
 		} catch (err) {
 			console.error("Error creating Spine animation:", err);
 			setErrorMsg("Error creating Spine animation: " + err.message);
