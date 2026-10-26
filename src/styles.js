@@ -27,13 +27,17 @@ export const baseTheme = {
 	}
 };
 
-const scaleFactor = 0.75;
+export const MIN_UI_SCALE = 0.7;
+export const MAX_UI_SCALE = 1.6;
 const playButtonColor = "#6699FF";
 const pauseButtonColor = "#B0B0B0";
 
-export const getStyles = (theme) => {
+// uiScale is the user's interface size, 1 is the normal one
+export const getStyles = (theme, uiScale = 1) => {
 	const currentTheme = baseTheme[theme];
+	const scaleFactor = 0.75 * uiScale;
 	return {
+		uiScale,
 		wrapper: {
 			display: "flex",
 			flexDirection: "column",
@@ -78,6 +82,18 @@ export const getStyles = (theme) => {
 		},
 		currentThemeText: {
 			fontSize: `${scaleFactor * 14.4}px`
+		},
+		uiScaleLabel: {
+			display: "flex",
+			alignItems: "center",
+			gap: `${scaleFactor * 6}px`,
+			fontSize: `${scaleFactor * 14.4}px`
+		},
+		// a fixed width, so the slider does not change size under the mouse while it scales everything else
+		uiScaleSlider: {
+			width: "100px",
+			margin: 0,
+			cursor: "pointer"
 		},
 		mainContent: {
 			display: "flex",
@@ -442,6 +458,14 @@ export const getStyles = (theme) => {
 			pointerEvents: "none",
 			zIndex: 1
 		},
+		timelineEvent: {
+			position: "absolute",
+			top: 0,
+			bottom: 0,
+			width: "3px",
+			backgroundColor: "#ffc107",
+			transform: "translateX(-1px)"
+		},
 		trimControls: {
 			marginTop: `${scaleFactor * 6}px`
 		},
@@ -579,10 +603,14 @@ export const getStyles = (theme) => {
 			zIndex: 2,
 			pointerEvents: "none"
 		},
+		// kept between the scene buttons on the left and right, so a big UI size cuts it instead of hiding it under them
 		phoneCaption: {
 			position: "absolute",
-			left: 0,
-			right: 0,
+			left: `${scaleFactor * 160}px`,
+			right: `${scaleFactor * 160}px`,
+			whiteSpace: "nowrap",
+			overflow: "hidden",
+			textOverflow: "ellipsis",
 			textAlign: "center",
 			fontSize: `${scaleFactor * 12}px`,
 			color: theme === "dark" ? "#bbbbbb" : "#666666",

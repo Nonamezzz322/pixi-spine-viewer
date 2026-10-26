@@ -12,6 +12,7 @@ import TextStyleEditor from "./TextStyleEditor";
 import BitmapFontEditor from "./BitmapFontEditor";
 import { textFontsReady } from "./fonts";
 import { createBitmapCountup, easeCountup, formatBitmapValue, toNumberText } from "./countup";
+import { getElementConfig } from "./gameConfig";
 
 const TYPE_LABELS = { static: "Image", spine: "Spine", bitmap: "Bitmap", text: "Text", emitter: "Emitter", fader: "Fader", mask: "Mask" };
 // screen pixels around a mask point or edge middle that grab it
@@ -30,12 +31,12 @@ const DESIGN_SIZES = { landscape: { x: 1920, y: 1080 }, portrait: { x: 1080, y: 
 const PHONE_MARGIN = 48;
 const PHONE_BEZEL = 10;
 
-// the phone screen fitted into the scene area, in pixels
-const getPhoneFrame = (viewport, area) => {
+// the phone screen fitted into the scene area, in pixels; the margin keeps room for the scene buttons
+const getPhoneFrame = (viewport, area, margin) => {
 	const portrait = viewport === "portrait";
 	const screenWidth = portrait ? IPHONE.width : IPHONE.height;
 	const screenHeight = portrait ? IPHONE.height : IPHONE.width;
-	const k = Math.max(0.05, Math.min((area.width - PHONE_MARGIN * 2) / screenWidth, (area.height - PHONE_MARGIN * 2) / screenHeight));
+	const k = Math.max(0.05, Math.min((area.width - margin * 2) / screenWidth, (area.height - margin * 2) / screenHeight));
 	const width = screenWidth * k;
 	const height = screenHeight * k;
 	const left = (area.width - width) / 2;
@@ -194,10 +195,10 @@ const getBaseName = (path) => path.split("/").pop().replace(/\.[^.]+$/, "");
 const isImage = (file) => file.type.startsWith("image/");
 // bitmap-value's scaleText: shrinks the bitmap to the width budget, never grows it;
 // minFitWidthPx makes short texts count as at least that wide, so "5" and "1.25k" get the same size
-const fitBitmap = (obj, el) => {
+const fitBitmap = (obj, el, scale) => {
 	const fitWidth = Math.max(obj.textWidth, el.minFitWidthPx || 0);
 	const fitScale = el.scaleToWidth > 0 && fitWidth > el.scaleToWidth ? el.scaleToWidth / fitWidth : 1;
-	obj.scale.set(el.scale * fitScale);
+	obj.scale.set(scale * fitScale);
 };
 
 export default function Constructor({ styles, active }) {
@@ -256,6 +257,10 @@ export default function Constructor({ styles, active }) {
 	bitmapFontsRef.current = bitmapFonts;
 
 	viewportRef.current = ui.viewport;
+
+	// like the game's { landscape, portrait } configs: the portrait view has its own x, y and scale once one is changed there;
+	// landscape and desktop use the element's main ones
+	const getPlace = (el) => (viewportRef.current === "portrait" && el.portrait ? el.portrait : el);
 
 	const placeRoot = () => {
 		const app = appRef.current;
@@ -367,7 +372,7 @@ export default function Constructor({ styles, active }) {
 					obj.text = progress < 1 ? run.format(run.target * easeCountup(progress)) : run.finalText;
 					// the game fits the bitmap again on every value it sets
 					const el = elementsRef.current.find((item) => item.id === Number(id));
-					if (el) fitBitmap(obj, el);
+					if (el) fitBitmap(obj, el, getPlace(el).scale);
 				}
 				if (!obj || progress === 1) delete incrementsRef.current[id];
 			}
@@ -406,7 +411,9 @@ export default function Constructor({ styles, active }) {
 	}, []);
 
 	useEffect(() => {
-		if (appRef.current) placeRoot();
+		if (!appRef.current) return;
+		placeRoot();
+		for (const el of elementsRef.current) syncObject(el, el);
 	}, [ui.viewport]);
 
 	useEffect(() => {
@@ -439,8 +446,9 @@ export default function Constructor({ styles, active }) {
 
 	const syncObject = (el, prev) => {
 		const obj = objectsRef.current[el.id];
-		obj.position.set(el.x, el.y);
-		obj.scale.set(el.scale);
+		const place = getPlace(el);
+		obj.position.set(place.x, place.y);
+		obj.scale.set(place.scale);
 		obj.angle = el.rotation;
 		obj.alpha = el.alpha;
 		obj.visible = el.visible;
@@ -459,7 +467,7 @@ export default function Constructor({ styles, active }) {
 			obj.align = el.align;
 			obj.letterSpacing = el.letterSpacing;
 			obj.maxWidth = el.maxWidth;
-			fitBitmap(obj, el);
+			fitBitmap(obj, el, place.scale);
 		} else if (el.type === "fader") {
 			applyFader(el);
 		} else if (el.type === "mask") {
@@ -485,9 +493,17 @@ export default function Constructor({ styles, active }) {
 
 	const updateElement = (id, changes) => {
 		const prev = elementsRef.current.find((el) => el.id === id);
-		const next = { ...prev, ...changes };
+		const next = { ...prev, ...toPlaceChanges(prev, changes) };
 		syncObject(next, prev);
 		changeElements(elementsRef.current.map((el) => (el.id === id ? next : el)));
+	};
+
+	// in the portrait view x, y and scale go to the element's portrait place; changes that set "portrait" themselves stay as they are
+	const toPlaceChanges = (el, changes) => {
+		if (viewportRef.current !== "portrait" || el.attach || "portrait" in changes || !["x", "y", "scale"].some((key) => key in changes)) return changes;
+		const { x, y, scale } = getPlace(el);
+		const { x: newX = x, y: newY = y, scale: newScale = scale, ...rest } = changes;
+		return { ...rest, portrait: { x: newX, y: newY, scale: newScale } };
 	};
 
 	const addElement = (type, obj, props) => {
@@ -541,12 +557,13 @@ export default function Constructor({ styles, active }) {
 
 	const setElementSlot = (id, attach) => {
 		const el = elementsRef.current.find((item) => item.id === id);
+		// the slot moves with its spine's own place, so an element in a slot has one place for every view
 		const changes = { attach };
-		if (attach && !el.attach) Object.assign(changes, { x: 0, y: 0 });
+		if (attach && !el.attach) Object.assign(changes, { x: 0, y: 0, portrait: null });
 		if (!attach && el.attach) {
 			// leaving a slot keeps the element where it is on screen
 			const p = rootRef.current.toLocal(objectsRef.current[id].getGlobalPosition());
-			Object.assign(changes, { x: Math.round(p.x), y: Math.round(p.y) });
+			Object.assign(changes, { x: Math.round(p.x), y: Math.round(p.y), portrait: null });
 		}
 		updateElement(id, changes);
 		placeObjects();
@@ -607,7 +624,7 @@ export default function Constructor({ styles, active }) {
 				selectElement(hit.id);
 				// moved in its parent's space: a rotated, scaled bone when the element sits in a slot
 				const start = objectsRef.current[hit.id].parent.toLocal(new Point(x, y));
-				dragRef.current = { id: hit.id, start, startX: e.clientX, startY: e.clientY, origX: hit.x, origY: hit.y };
+				dragRef.current = { id: hit.id, start, startX: e.clientX, startY: e.clientY, origX: getPlace(hit).x, origY: getPlace(hit).y };
 			} else {
 				dragRef.current = { pan: true, startX: e.clientX, startY: e.clientY, origX: panRef.current.x, origY: panRef.current.y };
 			}
@@ -1644,13 +1661,23 @@ export default function Constructor({ styles, active }) {
 				{options.map((option) => <option key={option} value={option}>{option}</option>)}
 			</select>
 		);
+		const place = getPlace(el);
+		const config = el.type === "fader" || el.type === "mask" ? null : getElementConfig(el);
 		return (
 			<>
 				<h3 style={styles.sectionHeader}>{TYPE_LABELS[el.type]}</h3>
 				<Field label="Name" styles={styles}><input style={styles.fieldInput} value={el.name} onChange={(e) => update({ name: e.target.value })} /></Field>
-				<Field label="X" styles={styles}>{number(el.x, (x) => update({ x }))}</Field>
-				<Field label="Y" styles={styles}>{number(el.y, (y) => update({ y }))}</Field>
-				<Field label="Scale" styles={styles}>{number(el.scale, (scale) => update({ scale }), 0.05)}</Field>
+				<div style={{ ...styles.fieldRow, opacity: 0.7 }}>
+					<span style={{ flex: 1 }}>
+						{el.attach ? "Place in the slot (every view)" : ui.viewport !== "portrait" ? "Place: landscape and desktop" : el.portrait ? "Place: portrait (own)" : "Place: portrait (same as landscape until changed)"}
+					</span>
+					{!el.attach && ui.viewport === "portrait" && el.portrait && (
+						<button style={styles.queueClearButton} onClick={() => update({ portrait: null })} title="Drop the portrait place and use the landscape one">Use landscape</button>
+					)}
+				</div>
+				<Field label="X" styles={styles}>{number(place.x, (x) => update({ x }))}</Field>
+				<Field label="Y" styles={styles}>{number(place.y, (y) => update({ y }))}</Field>
+				<Field label="Scale" styles={styles}>{number(place.scale, (scale) => update({ scale }), 0.05)}</Field>
 				<Field label="Rotation, °" styles={styles}>{number(el.rotation, (rotation) => update({ rotation }), 5)}</Field>
 				{/* a mask is never drawn, so its alpha would change nothing */}
 				{el.type !== "mask" && (
@@ -1755,17 +1782,24 @@ export default function Constructor({ styles, active }) {
 				{el.type === "text" && <TextStyleEditor style={el.style} onChange={(style) => update({ style })} onError={setErrorMsg} styles={styles} />}
 				{el.type === "emitter" && renderEmitterPanel(el)}
 				{el.type === "mask" && renderMaskPanel(el)}
+				{config && (
+					<>
+						<h3 style={styles.sectionHeader}>Game config</h3>
+						<textarea style={styles.jsonInput} rows={Math.min(14, config.split("\n").length)} readOnly spellCheck={false} value={config} aria-label="Game config" />
+						<button style={{ ...styles.queueClearButton, marginTop: "4px" }} onClick={() => navigator.clipboard.writeText(config).catch((err) => setErrorMsg("Copy failed: " + err.message))}>Copy config</button>
+					</>
+				)}
 			</>
 		);
 	};
 
-	const phone = ui.viewport === "desktop" ? null : getPhoneFrame(ui.viewport, area);
+	const phone = ui.viewport === "desktop" ? null : getPhoneFrame(ui.viewport, area, PHONE_MARGIN * styles.uiScale);
 
 	return (
 		<div style={{ ...styles.mainContent, display: active ? "flex" : "none" }}>
 			<input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={onFileInputChange} />
 			{ui.leftPanel && (
-				<div style={{ ...styles.debugPanel, width: 220 }}>
+				<div style={{ ...styles.debugPanel, width: 220 * styles.uiScale }}>
 					<h3 style={styles.sectionHeader}>Scene</h3>
 					<div style={styles.addButtons}>
 						<button style={styles.addButton} onClick={exportScene} title="scene.json with every file of the scene">Export .zip</button>
@@ -1851,7 +1885,7 @@ export default function Constructor({ styles, active }) {
 							/>
 							<div style={{ ...styles.phoneIsland, ...phone.island }} />
 							{/* above the phone: below it the zoom controls would cover it */}
-							<div style={{ ...styles.phoneCaption, top: phone.top - PHONE_BEZEL - 22 }}>
+							<div style={{ ...styles.phoneCaption, top: phone.top - PHONE_BEZEL - 22 * styles.uiScale }}>
 								iPhone 16 Pro · {phone.screenWidth} × {phone.screenHeight} pt · game design {DESIGN_SIZES[ui.viewport].x} × {DESIGN_SIZES[ui.viewport].y}
 							</div>
 						</>
@@ -1902,7 +1936,7 @@ export default function Constructor({ styles, active }) {
 				</div>
 			</div>
 			{ui.rightPanel && (
-				<div style={{ ...styles.sidebar, width: 280 }}>
+				<div style={{ ...styles.sidebar, width: 280 * styles.uiScale }}>
 					<div style={styles.fixedArea}>
 						{errorMsg && <div style={styles.errorText}>{errorMsg}</div>}
 						{selected ? renderProperties(selected) : <p style={styles.sliderLabel}>Select an element on the canvas or in the layers list</p>}

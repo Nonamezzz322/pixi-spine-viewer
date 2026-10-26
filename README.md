@@ -1,6 +1,6 @@
 # Pixi Spine Viewer Tool
 
-Pixi Spine Viewer Tool is a web application for previewing and interacting with Spine animations using Pixi.js and pixi-spine. It has two tabs.
+Pixi Spine Viewer Tool is a web application for previewing and interacting with Spine animations using Pixi.js and pixi-spine. It has two tabs. The "UI" slider next to the theme switch sets the interface size (70–160%) and is kept in the browser.
 
 **Spine Viewer** allows you to:
 
@@ -8,12 +8,13 @@ Pixi Spine Viewer Tool is a web application for previewing and interacting with 
 - Play and pause the animation, with adjustable playback speed.
 - Scale the Spine animation.
 - Select animations and skins from a dropdown menu.
+- See the Spine events of the animation: markers on the timeline, a list with their times and values (click one to go to its time) and a log of the events fired on every track.
 - Put a circle or your own image into any slot, on top of the slot art or instead of it, and hide any slot.
 - Adjust the scale of the attached markers.
 - Resize the debug and side panels.
 - Filter the list of slots.
 
-**Spine Constructor** builds a small Pixi scene from several elements:
+**Scene Constructor** builds a small Pixi scene from several elements:
 
 - Images, Spine animations, texts, bitmaps and particle emitters.
 - Texts use the `MyriadPro` family of base-slot styles (Regular / Bold), drawn with the free Source Sans 3 look-alike, and have a full style editor with JSON import and export in the game `textStyle` format.
@@ -27,6 +28,7 @@ Pixi Spine Viewer Tool is a web application for previewing and interacting with 
 - View the scene on an iPhone 16 Pro screen in landscape or portrait (icons at the top right of the scene): the stage fits the game design size (1920 × 1080 / 1080 × 1820) like the game's resizer. The buttons at the top left hide or show the side panels.
 - Select and drag elements on the canvas, zoom with the slider (5–1000%, sticks to 100% in the middle) or the mouse wheel, pan by dragging empty space.
 - Edit position, scale, rotation, alpha and the settings of each element type; change layer order, hide or delete elements.
+- Position and scale are kept per orientation like the game's `{ landscape, portrait }` configs: landscape and desktop share one, the portrait view gets its own once you change it there ("Use landscape" drops it). "Game config" shows the element as a piece of the game's TypeScript config (positions, scale, a bitmap's countup `textStyle` and bitmap-value props, a text style) with a Copy button.
 - Configure emitters with the form or with any `@pixi/particle-emitter` JSON config (configs from the old Pixi Particles Editor are converted).
 
 ## Getting Started

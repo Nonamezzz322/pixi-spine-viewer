@@ -1,10 +1,19 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import { Application, Container, Graphics, Matrix, Sprite, Text, filters } from "pixi.js";
-import { getStyles } from "./styles";
+import { MAX_UI_SCALE, MIN_UI_SCALE, getStyles } from "./styles";
 import { createSkeletonData, createSpine, readSpineFiles } from "./spine";
 import Constructor from "./Constructor";
 
 const markerMatrix = new Matrix();
+const UI_SCALE_KEY = "pixi-spine-viewer.ui-scale";
+
+// the values a Spine event carries, only the ones set in Spine
+const getEventValues = (event) => [
+	event.intValue && `int ${event.intValue}`,
+	event.floatValue && `float ${event.floatValue}`,
+	event.stringValue && `"${event.stringValue}"`,
+	event.data.audioPath && `audio ${event.data.audioPath}`
+].filter(Boolean).join(", ");
 
 const ThemeToggle = ({ theme, styles, toggleTheme }) => (
 	<label style={styles.toggleSwitch}>
@@ -29,6 +38,14 @@ function App() {
 	const [attachedSlots, setAttachedSlots] = useState([]);
 	const [circleScaleValue, setCircleScaleValue] = useState(1.0);
 	const [theme, setTheme] = useState("dark");
+	const [uiScale, setUiScale] = useState(() => {
+		try {
+			const saved = Number(localStorage.getItem(UI_SCALE_KEY)) || 1;
+			return Math.min(MAX_UI_SCALE, Math.max(MIN_UI_SCALE, saved));
+		} catch {
+			return 1;
+		}
+	});
 	const [tab, setTab] = useState("viewer");
 	const [debugMode, setDebugMode] = useState(false);
 	const [animationQueue, setAnimationQueue] = useState([]);
@@ -50,6 +67,8 @@ function App() {
 	const [trimStart, setTrimStart] = useState(0);
 	const [trimEnd, setTrimEnd] = useState(0);
 	const [trimEnabled, setTrimEnabled] = useState(false);
+	const [animEvents, setAnimEvents] = useState([]);
+	const [eventLog, setEventLog] = useState([]);
 	const [additionalTracks, setAdditionalTracks] = useState([]);
 	const [slotAssets, setSlotAssets] = useState([]);
 	const [slotMode, setSlotMode] = useState("add");
@@ -83,11 +102,21 @@ function App() {
 	const trimStartRef = useRef(0);
 	const trimEndRef = useRef(0);
 	const trimEnabledRef = useRef(false);
+	const eventIdRef = useRef(0);
 	const selectedDebugEntitiesRef = useRef({
 		regionAttachments: new Set(), meshes: new Set(), paths: new Set(), boundingBoxes: new Set(), clipping: new Set()
 	});
 
-	const styles = getStyles(theme);
+	const styles = getStyles(theme, uiScale);
+
+	const changeUiScale = (value) => {
+		setUiScale(value);
+		try {
+			localStorage.setItem(UI_SCALE_KEY, String(value));
+		} catch {
+			// only a convenience, the app works without it
+		}
+	};
 
 	const updateSpinePosition = useCallback(() => {
 		if (pixiAppRef.current && spineInstanceRef.current) {
@@ -256,6 +285,8 @@ function App() {
 			queueIndexRef.current = -1;
 			setAdditionalTracks([]);
 			setAnimDuration(0);
+			setAnimEvents([]);
+			setEventLog([]);
 			setBoneNames([]);
 			setSelectedBones(new Set());
 			selectedBonesRef.current = new Set();
@@ -418,9 +449,10 @@ function App() {
 		e.preventDefault();
 		const startX = e.clientX;
 		// the panel may grow only while the canvas keeps at least 200px
-		const maxWidth = startWidth + pixiContainerRef.current.clientWidth - 200;
+		// widths are kept at the normal UI size and drawn times uiScale
+		const maxWidth = startWidth + (pixiContainerRef.current.clientWidth - 200) / uiScale;
 		const onMove = (evt) => {
-			const width = startWidth + (evt.clientX - startX) * direction;
+			const width = startWidth + ((evt.clientX - startX) * direction) / uiScale;
 			setWidth(Math.max(150, Math.min(width, maxWidth)));
 		};
 		const onUp = () => {
@@ -620,8 +652,11 @@ function App() {
 	};
 
 	const resetTimeline = (animName) => {
-		const dur = spineInstanceRef.current?.skeleton.data.findAnimation(animName)?.duration || 0;
+		const animation = spineInstanceRef.current?.skeleton.data.findAnimation(animName);
+		const dur = animation?.duration || 0;
 		setAnimDuration(dur);
+		// only event timelines have "events"
+		setAnimEvents(animation ? animation.timelines.flatMap((timeline) => timeline.events || []) : []);
 		setTrimStart(0);
 		setTrimEnd(dur);
 		trimStartRef.current = 0;
@@ -697,6 +732,10 @@ function App() {
 			}
 			setDebugEntities(entities);
 			spineAnimation.state.addListener({
+				event: (entry, event) => {
+					const item = { id: eventIdRef.current++, track: entry.trackIndex, animation: entry.animation.name, name: event.data.name, time: event.time, values: getEventValues(event) };
+					setEventLog((prev) => [item, ...prev].slice(0, 20));
+				},
 				complete: (entry) => {
 					// the listener gets every track, and a looping entry fires on every loop
 					if (entry.trackIndex !== 0) return;
@@ -1062,16 +1101,30 @@ function App() {
 			<header style={styles.header}>
 				<div style={styles.headerTabs}>
 					<button style={styles.headerTab(tab === "viewer")} onClick={() => setTab("viewer")}>Spine Viewer</button>
-					<button style={styles.headerTab(tab === "constructor")} onClick={() => setTab("constructor")}>Spine Constructor</button>
+					<button style={styles.headerTab(tab === "constructor")} onClick={() => setTab("constructor")}>Scene Constructor</button>
 				</div>
 				<div style={styles.headerRight}>
+					<label style={styles.uiScaleLabel} title="Interface size; double-click for 100%">
+						UI {Math.round(uiScale * 100)}%
+						<input
+							type="range"
+							min={MIN_UI_SCALE}
+							max={MAX_UI_SCALE}
+							step={0.05}
+							value={uiScale}
+							onChange={(e) => changeUiScale(parseFloat(e.target.value))}
+							onDoubleClick={() => changeUiScale(1)}
+							style={styles.uiScaleSlider}
+							aria-label="Interface size"
+						/>
+					</label>
 					<span style={styles.currentThemeText}>{theme === "dark" ? "Dark" : "Light"}</span>
 					<ThemeToggle theme={theme} styles={styles} toggleTheme={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))} />
 				</div>
 			</header>
 			<div style={{ ...styles.mainContent, display: tab === "viewer" ? "flex" : "none" }}>
 				{debugMode && spineLoaded && (
-					<div style={{ ...styles.debugPanel, width: debugPanelWidth }}>
+					<div style={{ ...styles.debugPanel, width: debugPanelWidth * uiScale }}>
 						<div style={{ ...styles.resizeHandle, right: 0 }} onMouseDown={(e) => startPanelResize(e, debugPanelWidth, setDebugPanelWidth, 1)} />
 						<select style={styles.animationsSelect} value={debugEntityType} onChange={(e) => { setDebugEntityType(e.target.value); setDebugFilter(""); }}>
 							<option value="slots">Slots ({allSlots.length})</option>
@@ -1250,7 +1303,7 @@ function App() {
 						{errorMsg && <p style={{ zIndex: 3, position: "relative" }}>{errorMsg}</p>}
 					</div>
 				</div>
-				<div style={{ ...styles.sidebar, width: sidebarWidth }}>
+				<div style={{ ...styles.sidebar, width: sidebarWidth * uiScale }}>
 					<div style={{ ...styles.resizeHandle, left: 0 }} onMouseDown={(e) => startPanelResize(e, sidebarWidth, setSidebarWidth, -1)} />
 					<div style={styles.fixedArea}>
 						<h3 style={styles.sectionHeader}>Animation</h3>
@@ -1405,6 +1458,9 @@ function App() {
 											width: `${((trimEnd - trimStart) / animDuration) * 100}%`
 										}} />
 									)}
+									{animEvents.map((event, i) => (
+										<div key={i} style={{ ...styles.timelineEvent, left: `${(event.time / animDuration) * 100}%` }} title={`${event.data.name} · ${event.time.toFixed(2)}s`} />
+									))}
 									<div ref={playheadRef} style={styles.timelinePlayhead} />
 								</div>
 								<div style={styles.trimControls}>
@@ -1446,6 +1502,36 @@ function App() {
 											</div>
 										</div>
 									)}
+								</div>
+								{animEvents.length > 0 && (
+									<div style={styles.queueSection}>
+										<span style={styles.sliderLabel}>Events</span>
+										<div style={styles.queueList}>
+											{animEvents.map((event, i) => (
+												<div key={i} style={{ ...styles.queueItem, cursor: "pointer" }} onClick={() => handleScrub(event.time)} title="Go to this time">
+													<span style={styles.queueItemIndex}>{event.time.toFixed(2)}s</span>
+													<span style={styles.queueItemName}>{event.data.name}{getEventValues(event) && ` · ${getEventValues(event)}`}</span>
+												</div>
+											))}
+										</div>
+									</div>
+								)}
+							</div>
+						)}
+						{eventLog.length > 0 && (
+							<div style={styles.queueSection}>
+								<div style={styles.queueHeader}>
+									<span style={styles.sliderLabel}>Event log</span>
+									<button style={styles.queueClearButton} onClick={() => setEventLog([])}>Clear</button>
+								</div>
+								<div style={styles.queueList}>
+									{eventLog.map((item) => (
+										<div key={item.id} style={styles.queueItem} title={`${item.animation}, track ${item.track}`}>
+											<span style={styles.queueItemIndex}>{item.time.toFixed(2)}s</span>
+											<span style={styles.queueItemName}>{item.name}{item.values && ` · ${item.values}`}</span>
+											<span style={styles.queueItemIndex}>t{item.track}</span>
+										</div>
+									))}
 								</div>
 							</div>
 						)}
