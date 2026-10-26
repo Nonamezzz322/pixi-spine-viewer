@@ -6,8 +6,9 @@ Pixi Spine Viewer Tool is a web application for previewing and interacting with 
 - Play and pause the animation, with adjustable playback speed.
 - Scale the Spine animation.
 - Select animations and skins from a dropdown menu.
-- Attach and remove circular markers on specific slots.
-- Adjust the scale of the attached circles.
+- Put a circle or your own image into any slot, on top of the slot art or instead of it, and hide any slot.
+- Adjust the scale of the attached markers.
+- Resize the debug and side panels.
 - Filter the list of slots.
 
 ## Getting Started
@@ -23,11 +24,5 @@ Npm package manager is used to install dependencies and run scripts.
 npm i
 npm run build
 npm run preview
-```
-
-Yarn package manager is used to install dependencies and run scripts.
-```sh
-yarn
-yarn build
-yarn preview
+npm test
 ```

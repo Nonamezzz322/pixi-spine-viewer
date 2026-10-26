@@ -1,12 +1,9 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
-import { Application, BaseTexture, Graphics, Text, filters } from "pixi.js";
+import { Application, BaseTexture, Container, Graphics, Matrix, Sprite, Text, filters } from "pixi.js";
 import { Spine, TextureAtlas } from "pixi-spine";
 import { AtlasAttachmentLoader, SkeletonJson } from "@pixi-spine/runtime-4.1";
 import { getStyles } from "./styles";
-
-function modifyAtlasText(atlasText, fileURLs) {
-	return atlasText;
-}
+import { findImageFile, findSpineFiles } from "./files";
 
 function expandSequencePath(basePath, seq) {
 	const count = seq.count || 0;
@@ -50,45 +47,6 @@ function extractImageNames(jsonData) {
 		}
 	}
 	return imageNames;
-}
-
-function findImageFile(imgName, fileURLs) {
-	const extensions = [".png", ".jpg", ".jpeg", ".webp"];
-	const baseName = imgName.split("/").pop();
-	// exact match with extension
-	for (const ext of extensions) {
-		if (fileURLs[imgName + ext]) return { url: fileURLs[imgName + ext], fileName: imgName + ext };
-	}
-	// exact match as-is
-	if (fileURLs[imgName]) return { url: fileURLs[imgName], fileName: imgName };
-	// case-insensitive full path
-	for (const ext of extensions) {
-		const target = (imgName + ext).toLowerCase();
-		for (const key in fileURLs) {
-			if (key.toLowerCase() === target) return { url: fileURLs[key], fileName: key };
-		}
-	}
-	// case-insensitive basename only
-	for (const ext of extensions) {
-		const target = (baseName + ext).toLowerCase();
-		for (const key in fileURLs) {
-			if (key.split("/").pop().toLowerCase() === target) return { url: fileURLs[key], fileName: key };
-		}
-	}
-	// basename without extension match
-	const targetBase = baseName.toLowerCase();
-	for (const key in fileURLs) {
-		const keyBase = key.split("/").pop().toLowerCase().replace(/\.[^.]+$/, "");
-		if (keyBase === targetBase) return { url: fileURLs[key], fileName: key };
-	}
-	// endsWith match (handles folder prefixes like "images/subfolder/name")
-	for (const ext of extensions) {
-		const suffix = ("/" + imgName + ext).toLowerCase();
-		for (const key in fileURLs) {
-			if (("/" + key).toLowerCase().endsWith(suffix)) return { url: fileURLs[key], fileName: key };
-		}
-	}
-	return null;
 }
 
 const PLACEHOLDER_URL = (() => {
@@ -163,6 +121,17 @@ function generateAtlasFromImages(jsonData, fileURLs) {
 	});
 }
 
+const markerMatrix = new Matrix();
+
+const ThemeToggle = ({ theme, styles, toggleTheme }) => (
+	<label style={styles.toggleSwitch}>
+		<input type="checkbox" checked={theme === "light"} onChange={toggleTheme} style={{ display: "none" }} />
+		<span style={styles.toggleSlider(theme)}>
+			<span style={styles.toggleKnob(theme)}></span>
+		</span>
+	</label>
+);
+
 function App() {
 	const [spineLoaded, setSpineLoaded] = useState(false);
 	const [animationPlaying, setAnimationPlaying] = useState(false);
@@ -178,14 +147,13 @@ function App() {
 	const [circleScaleValue, setCircleScaleValue] = useState(1.0);
 	const [theme, setTheme] = useState("dark");
 	const [debugMode, setDebugMode] = useState(false);
-	const [fps, setFps] = useState(0);
 	const [animationQueue, setAnimationQueue] = useState([]);
 	const [queueLoop, setQueueLoop] = useState(false);
 	const [boneNames, setBoneNames] = useState([]);
 	const [selectedBones, setSelectedBones] = useState(new Set());
 	const [boneFilter, setBoneFilter] = useState("");
-	const [showBones, setShowBones] = useState(true);
-	const [debugEntityType, setDebugEntityType] = useState("bones");
+	const [showBones, setShowBones] = useState(false);
+	const [debugEntityType, setDebugEntityType] = useState("slots");
 	const [debugEntities, setDebugEntities] = useState({
 		regionAttachments: [], meshes: [], paths: [], boundingBoxes: [], clipping: []
 	});
@@ -194,26 +162,38 @@ function App() {
 	});
 	const [debugFilter, setDebugFilter] = useState("");
 	const [queueIndex, setQueueIndex] = useState(-1);
-	const [animTime, setAnimTime] = useState(0);
 	const [animDuration, setAnimDuration] = useState(0);
 	const [trimStart, setTrimStart] = useState(0);
 	const [trimEnd, setTrimEnd] = useState(0);
 	const [trimEnabled, setTrimEnabled] = useState(false);
 	const [additionalTracks, setAdditionalTracks] = useState([]);
+	const [slotAssets, setSlotAssets] = useState([]);
+	const [slotMode, setSlotMode] = useState("add");
+	const [hiddenSlots, setHiddenSlots] = useState(new Set());
+	const [debugPanelWidth, setDebugPanelWidth] = useState(220);
+	const [sidebarWidth, setSidebarWidth] = useState(225);
 
 	const pixiContainerRef = useRef(null);
 	const pixiAppRef = useRef(null);
 	const spineInstanceRef = useRef(null);
 	const attachedCirclesRef = useRef({});
+	const attachedSlotsRef = useRef([]);
+	const hiddenSlotsRef = useRef(new Set());
 	const filesDataRef = useRef({});
 	const fileInputRef = useRef(null);
+	const assetInputRef = useRef(null);
+	const loadIntoSlotRef = useRef(null);
+	const fpsRef = useRef(null);
+	const playheadRef = useRef(null);
+	const timeLabelRef = useRef(null);
+	const pageTexturesRef = useRef([]);
 	const bonesGraphicsRef = useRef(null);
 	const animationQueueRef = useRef([]);
 	const queueLoopRef = useRef(false);
 	const queueIndexRef = useRef(-1);
 	const selectedBonesRef = useRef(new Set());
 	const debugGraphicsRef = useRef(null);
-	const regionFiltersRef = useRef(new Map());
+	const regionFiltersRef = useRef(new Set());
 	const dragOffsetRef = useRef({ x: 0, y: 0 });
 	const draggingRef = useRef(null);
 	const trimStartRef = useRef(0);
@@ -225,27 +205,24 @@ function App() {
 
 	const styles = getStyles(theme);
 
-	const ThemeToggle = ({ theme, toggleTheme }) => (
-		<label style={styles.toggleSwitch}>
-			<input type="checkbox" checked={theme === "light"} onChange={toggleTheme} style={{ display: "none" }} />
-			<span style={styles.toggleSlider(theme)}>
-        <span style={styles.toggleKnob(theme)}></span>
-      </span>
-		</label>
-	);
-
 	const updateSpinePosition = useCallback(() => {
 		if (pixiAppRef.current && spineInstanceRef.current) {
 			const spine = spineInstanceRef.current;
-			spine.updateTransform();
-			const bounds = spine.getLocalBounds();
 			const { width, height } = pixiAppRef.current.screen;
 			spine.scale.set(scaleValue);
-			spine.pivot.set(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
 			spine.x = width / 2 + dragOffsetRef.current.x;
 			spine.y = height / 2 + dragOffsetRef.current.y;
 		}
 	}, [scaleValue]);
+
+	// not called on drag/scale/resize: bounds change every frame, so the spine would jump
+	const centerSpine = () => {
+		const spine = spineInstanceRef.current;
+		if (!spine) return;
+		spine.updateTransform();
+		const bounds = spine.getLocalBounds();
+		spine.pivot.set(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+	};
 
 	useEffect(() => {
 		if (!pixiAppRef.current && pixiContainerRef.current) {
@@ -265,7 +242,9 @@ function App() {
 	useEffect(() => {
 		if (!pixiAppRef.current) return;
 		const ticker = pixiAppRef.current.ticker;
-		const updateFps = () => setFps(Math.round(ticker.FPS));
+		const updateFps = () => {
+			if (fpsRef.current) fpsRef.current.textContent = `${Math.round(ticker.FPS)} FPS`;
+		};
 		ticker.add(updateFps);
 		return () => ticker.remove(updateFps);
 	}, []);
@@ -279,13 +258,14 @@ function App() {
 			if (!track) return;
 			const t = track.getAnimationTime();
 			const dur = track.animation ? track.animation.duration : 0;
-			setAnimTime(t);
+			// written to the DOM directly: React state here would re-render the whole app every frame
+			if (playheadRef.current && dur > 0) playheadRef.current.style.left = `${(t / dur) * 100}%`;
+			if (timeLabelRef.current) timeLabelRef.current.textContent = `${t.toFixed(2)}s / ${dur.toFixed(2)}s`;
 			if (dur > 0 && trimEnabledRef.current) {
 				const ts = trimStartRef.current;
 				const te = trimEndRef.current;
-				if (t >= te) {
-					track.trackTime = track.trackTime - (t - ts);
-				}
+				// a looping track wraps to 0 before it reaches te, so check both ends
+				if (t < ts || t >= te) track.trackTime += ts - t;
 			}
 		};
 		ticker.add(updateTimeline);
@@ -307,25 +287,33 @@ function App() {
 		return () => observer.disconnect();
 	}, [updateSpinePosition]);
 
-	const updateCircles = useCallback(() => {
-		if (!spineInstanceRef.current) return;
-		for (const slotName in attachedCirclesRef.current) {
-			const circle = attachedCirclesRef.current[slotName];
-			const slot = spineInstanceRef.current.skeleton.findSlot(slotName);
-			if (slot && slot.bone) {
-				spineInstanceRef.current.slotContainers[slot.data.index].addChild(circle);
+	// Called right after spine.update(): pixi-spine sets slot visibility there every frame, so these overrides must come after it
+	const updateSlots = () => {
+		const spine = spineInstanceRef.current;
+		if (!spine) return;
+		for (const { slotName, mode } of attachedSlotsRef.current) {
+			const slot = spine.skeleton.findSlot(slotName);
+			const marker = attachedCirclesRef.current[slotName];
+			if (!slot || !marker) continue;
+			const container = spine.slotContainers[slot.data.index];
+			// pixi-spine adds new attachment sprites on top, so keep the marker last
+			if (container.children[container.children.length - 1] !== marker) container.addChild(marker);
+			// pixi-spine hides empty slots, but the marker should still show there
+			const showArt = container.visible && (mode === "add" || !marker.visible);
+			container.visible = true;
+			if (!showArt) {
+				for (const child of container.children) if (child !== marker) child.renderable = false;
 			}
+			// pixi-spine gives the bone transform only to region slots, so put the marker on the bone here
+			container.transform.updateLocalTransform();
+			markerMatrix.copyFrom(container.transform.localTransform).invert().append(slot.bone.matrix);
+			marker.transform.setFromMatrix(markerMatrix);
 		}
-	}, []);
-
-	useEffect(() => {
-		if (pixiAppRef.current) {
-			pixiAppRef.current.ticker.add(updateCircles);
-			return () => {
-				pixiAppRef.current.ticker.remove(updateCircles);
-			};
+		for (const slotName of hiddenSlotsRef.current) {
+			const slot = spine.skeleton.findSlot(slotName);
+			if (slot) spine.slotContainers[slot.data.index].visible = false;
 		}
-	}, [updateCircles]);
+	};
 
 	const handleScaleChange = (e) => {
 		const newScale = parseFloat(e.target.value);
@@ -345,20 +333,23 @@ function App() {
 		const newScale = parseFloat(e.target.value);
 		setCircleScaleValue(newScale);
 		Object.values(attachedCirclesRef.current).forEach((circle) => {
-			circle.scale.set(newScale);
+			circle.children[0].scale.set(newScale);
 		});
 	};
 
 	const loadFiles = useCallback(
-		(files) => {
+		async (files) => {
 			setErrorMsg("");
 			setSpineLoaded(false);
 			setAnimationPlaying(false);
 			setAvailableAnimations([]);
 			setSelectedAnimation("");
 			setAttachedSlots([]);
+			attachedSlotsRef.current = [];
+			setHiddenSlots(new Set());
+			hiddenSlotsRef.current = new Set();
 			setDebugMode(false);
-			setDebugEntityType("bones");
+			setDebugEntityType("slots");
 			dragOffsetRef.current = { x: 0, y: 0 };
 			setDebugEntities({ regionAttachments: [], meshes: [], paths: [], boundingBoxes: [], clipping: [] });
 			setSelectedDebugEntities({ regionAttachments: new Set(), meshes: new Set(), paths: new Set(), boundingBoxes: new Set(), clipping: new Set() });
@@ -369,15 +360,13 @@ function App() {
 			setQueueIndex(-1);
 			queueIndexRef.current = -1;
 			setAdditionalTracks([]);
+			setAnimDuration(0);
 			setBoneNames([]);
 			setSelectedBones(new Set());
 			selectedBonesRef.current = new Set();
 			setBoneFilter("");
 			for (const key in attachedCirclesRef.current) {
-				if (spineInstanceRef.current) {
-					spineInstanceRef.current.removeChild(attachedCirclesRef.current[key]);
-					attachedCirclesRef.current[key].destroy();
-				}
+				attachedCirclesRef.current[key].destroy({ children: true });
 			}
 			attachedCirclesRef.current = {};
 			if (bonesGraphicsRef.current) {
@@ -388,15 +377,17 @@ function App() {
 				debugGraphicsRef.current.destroy();
 				debugGraphicsRef.current = null;
 			}
-			for (const [, entry] of regionFiltersRef.current) {
-				entry.container.filters = [];
-			}
+			for (const container of regionFiltersRef.current) container.filters = [];
 			regionFiltersRef.current.clear();
 			if (spineInstanceRef.current && pixiAppRef.current) {
 				pixiAppRef.current.stage.removeChild(spineInstanceRef.current);
 				spineInstanceRef.current.destroy();
 				spineInstanceRef.current = null;
 			}
+			// pixi keeps textures in its cache until they are destroyed
+			for (const texture of new Set(pageTexturesRef.current)) texture.destroy();
+			pageTexturesRef.current = [];
+			for (const url of Object.values(filesDataRef.current)) URL.revokeObjectURL(url);
 			if (!files || files.length === 0) {
 				setErrorMsg("Files not found");
 				return;
@@ -410,73 +401,23 @@ function App() {
 				fileURLs[name] = URL.createObjectURL(filesMap[name]);
 			}
 			filesDataRef.current = fileURLs;
-			let jsonFileName = null;
-			let atlasFileName = null;
-			for (const name in filesMap) {
-				const lower = name.toLowerCase();
-				if (lower.endsWith(".json")) jsonFileName = name;
-				else if (lower.endsWith(".atlas")) atlasFileName = name;
-			}
-			if (!jsonFileName) {
-				setErrorMsg("JSON file not found");
+			const { jsonFileName, atlasFileName, error } = findSpineFiles(Object.keys(filesMap));
+			if (error) {
+				setErrorMsg(error);
 				return;
 			}
-			if (atlasFileName) {
-				const readerJSON = new FileReader();
-				const readerAtlas = new FileReader();
-				let jsonText = "";
-				let atlasText = "";
-				readerJSON.onload = (e) => {
-					jsonText = e.target.result;
-					if (atlasText) {
-						try {
-							const jsonData = JSON.parse(jsonText);
-							createSpineAnimation(jsonData, atlasText, fileURLs);
-						} catch (err) {
-							console.error("Error parsing JSON file:", err);
-							setErrorMsg("Error parsing JSON file: " + err.message);
-						}
-					}
-				};
-				readerJSON.onerror = (err) => {
-					console.error("Error reading JSON file:", err);
-					setErrorMsg("Error reading JSON file");
-				};
-				readerAtlas.onload = (e) => {
-					atlasText = e.target.result;
-					if (jsonText) {
-						try {
-							const jsonData = JSON.parse(jsonText);
-							createSpineAnimation(jsonData, atlasText, fileURLs);
-						} catch (err) {
-							console.error("Error parsing JSON file:", err);
-							setErrorMsg("Error parsing JSON file: " + err.message);
-						}
-					}
-				};
-				readerAtlas.onerror = (err) => {
-					console.error("Error reading ATLAS file:", err);
-					setErrorMsg("Error reading ATLAS file");
-				};
-				readerJSON.readAsText(filesMap[jsonFileName]);
-				readerAtlas.readAsText(filesMap[atlasFileName]);
-			} else {
-				const readerJSON = new FileReader();
-				readerJSON.onload = async (e) => {
-					try {
-						const jsonData = JSON.parse(e.target.result);
-						const atlasText = await generateAtlasFromImages(jsonData, fileURLs);
-						createSpineAnimation(jsonData, atlasText, fileURLs);
-					} catch (err) {
-						console.error("Error loading spine from images:", err);
-						setErrorMsg("Error: " + err.message);
-					}
-				};
-				readerJSON.onerror = () => setErrorMsg("Error reading JSON file");
-				readerJSON.readAsText(filesMap[jsonFileName]);
+			try {
+				const jsonData = JSON.parse(await filesMap[jsonFileName].text());
+				const atlasText = atlasFileName
+					? await filesMap[atlasFileName].text()
+					: await generateAtlasFromImages(jsonData, fileURLs);
+				createSpineAnimation(jsonData, atlasText, fileURLs);
+			} catch (err) {
+				console.error("Error loading spine files:", err);
+				setErrorMsg("Error loading spine files: " + err.message);
 			}
 		},
-		[updateSpinePosition]
+		[updateSpinePosition, speedValue]
 	);
 
 	useEffect(() => {
@@ -582,6 +523,32 @@ function App() {
 		[loadFiles]
 	);
 
+	const onAssetInputChange = (event) => {
+		const assets = Array.from(event.target.files).map((f) => ({ name: f.name, url: URL.createObjectURL(f) }));
+		if (assets.length > 0) {
+			setSlotAssets((prev) => [...prev, ...assets]);
+			changeSlotAsset(loadIntoSlotRef.current, assets[assets.length - 1].url);
+		}
+		event.target.value = "";
+	};
+
+	const startPanelResize = (e, startWidth, setWidth, direction) => {
+		e.preventDefault();
+		const startX = e.clientX;
+		// the panel may grow only while the canvas keeps at least 200px
+		const maxWidth = startWidth + pixiContainerRef.current.clientWidth - 200;
+		const onMove = (evt) => {
+			const width = startWidth + (evt.clientX - startX) * direction;
+			setWidth(Math.max(150, Math.min(width, maxWidth)));
+		};
+		const onUp = () => {
+			window.removeEventListener("mousemove", onMove);
+			window.removeEventListener("mouseup", onUp);
+		};
+		window.addEventListener("mousemove", onMove);
+		window.addEventListener("mouseup", onUp);
+	};
+
 	const onDragOver = useCallback((event) => {
 		event.preventDefault();
 	}, []);
@@ -651,30 +618,23 @@ function App() {
 		const py = (x, y) => wt.b * x + wt.d * y + wt.ty;
 
 		for (const slot of spine.skeleton.slots) {
-			if (!slot.bone.active) continue;
-			const att = slot.getAttachment();
-			if (!att) continue;
-			const key = `${slot.data.name}/${att.name}`;
+			const att = slot.bone.active ? slot.getAttachment() : null;
+			const key = att ? `${slot.data.name}/${att.name}` : "";
 
-			if (att.type === 0) {
-				const slotIdx = slot.data.index;
-				const container = spine.slotContainers[slotIdx];
-				if (sel.regionAttachments.has(key)) {
-					if (container && !regionFiltersRef.current.has(key)) {
-						const cm = new filters.ColorMatrixFilter();
-						cm.brightness(2, false);
-						cm.desaturate();
-						container.filters = [cm];
-						regionFiltersRef.current.set(key, { container, filter: cm });
-					}
-				} else {
-					if (regionFiltersRef.current.has(key)) {
-						const entry = regionFiltersRef.current.get(key);
-						entry.container.filters = [];
-						regionFiltersRef.current.delete(key);
-					}
-				}
+			// highlight is kept per slot, so it goes away when the slot shows another attachment
+			const container = spine.slotContainers[slot.data.index];
+			const highlight = att?.type === 0 && sel.regionAttachments.has(key);
+			if (highlight && !regionFiltersRef.current.has(container)) {
+				const cm = new filters.ColorMatrixFilter();
+				// = desaturate + brightness 2 in one matrix; pixi's multiply mode corrupts the matrix
+				cm.greyscale(2 / 3);
+				container.filters = [cm];
+				regionFiltersRef.current.add(container);
+			} else if (!highlight && regionFiltersRef.current.has(container)) {
+				container.filters = [];
+				regionFiltersRef.current.delete(container);
 			}
+			if (!att) continue;
 
 			if (att.type === 1 && sel.boundingBoxes.has(key)) {
 				const v = new Float32Array(att.worldVerticesLength);
@@ -740,9 +700,7 @@ function App() {
 	}, []);
 
 	const clearRegionFilters = useCallback(() => {
-		for (const [, entry] of regionFiltersRef.current) {
-			entry.container.filters = [];
-		}
+		for (const container of regionFiltersRef.current) container.filters = [];
 		regionFiltersRef.current.clear();
 	}, []);
 
@@ -779,9 +737,19 @@ function App() {
 		});
 	};
 
+	const resetTimeline = (animName) => {
+		const dur = spineInstanceRef.current?.skeleton.data.findAnimation(animName)?.duration || 0;
+		setAnimDuration(dur);
+		setTrimStart(0);
+		setTrimEnd(dur);
+		trimStartRef.current = 0;
+		trimEndRef.current = dur;
+		setTrimEnabled(false);
+		trimEnabledRef.current = false;
+	};
+
 	const createSpineAnimation = (jsonData, atlasText, fileURLs) => {
 		if (!pixiAppRef.current) return;
-		const modifiedAtlasText = modifyAtlasText(atlasText, fileURLs);
 		function getTextureForLine(line, fileURLs) {
 			if (fileURLs[line]) return BaseTexture.from(fileURLs[line]);
 			const lowerLine = line.toLowerCase();
@@ -796,7 +764,7 @@ function App() {
 		}
 		try {
 			const pageTextures = [];
-			const spineAtlas = new TextureAtlas(modifiedAtlasText, (line, callback) => {
+			const spineAtlas = new TextureAtlas(atlasText, (line, callback) => {
 				const texture = getTextureForLine(line, fileURLs);
 				if (texture) {
 					pageTextures.push(texture);
@@ -809,6 +777,7 @@ function App() {
 				}
 			});
 
+			pageTexturesRef.current = pageTextures;
 			const pendingTextures = pageTextures.filter((t) => !t.valid);
 			console.log(`[SpineViewer] Atlas: ${spineAtlas.pages.length} pages, ${spineAtlas.regions.length} regions, ${pendingTextures.length} pending textures`);
 			const finishSetup = () => { try {
@@ -846,6 +815,13 @@ function App() {
 					origSetMeshRegion(attachment, mesh, region);
 				};
 
+				// pixi-spine updates slots inside update() during render, so slot overrides run right after it
+				const origUpdate = spineAnimation.update.bind(spineAnimation);
+				spineAnimation.update = (dt) => {
+					origUpdate(dt);
+					updateSlots();
+				};
+
 				spineAnimation.autoUpdate = false;
 				spineAnimation.x = pixiAppRef.current.screen.width / 2;
 				spineAnimation.y = pixiAppRef.current.screen.height / 2;
@@ -859,14 +835,7 @@ function App() {
 					setAvailableAnimations(skeletonData.animations.map((anim) => anim.name));
 					setSelectedAnimation(animName);
 					spineAnimation.state.timeScale = speedValue;
-					const dur = skeletonData.findAnimation(animName)?.duration || 0;
-					setAnimDuration(dur);
-					setTrimStart(0);
-					setTrimEnd(dur);
-					trimStartRef.current = 0;
-					trimEndRef.current = dur;
-					setTrimEnabled(false);
-					trimEnabledRef.current = false;
+					resetTimeline(animName);
 				}
 				spineAnimation.autoUpdate = true;
 				requestAnimationFrame(() => {
@@ -905,7 +874,9 @@ function App() {
 				}
 				setDebugEntities(entities);
 				spineAnimation.state.addListener({
-					complete: () => {
+					complete: (entry) => {
+						// the listener gets every track, and a looping entry fires on every loop
+						if (entry.trackIndex !== 0) return;
 						const queue = animationQueueRef.current;
 						if (queue.length === 0) return;
 						const nextIdx = queueIndexRef.current + 1;
@@ -915,15 +886,15 @@ function App() {
 							setSelectedAnimation(queue[nextIdx]);
 							const isLast = nextIdx === queue.length - 1;
 							spineAnimation.state.setAnimation(0, queue[nextIdx], isLast && !queueLoopRef.current);
+							resetTimeline(queue[nextIdx]);
 						} else if (queueLoopRef.current) {
 							queueIndexRef.current = 0;
 							setQueueIndex(0);
 							setSelectedAnimation(queue[0]);
 							spineAnimation.state.setAnimation(0, queue[0], false);
-						} else {
-							queueIndexRef.current = -1;
-							setQueueIndex(-1);
+							resetTimeline(queue[0]);
 						}
+						// else: the last item keeps looping
 					}
 				});
 				setSpineLoaded(true);
@@ -969,7 +940,7 @@ function App() {
 			if (skin) {
 				skeleton.setSkin(skin);
 				skeleton.setSlotsToSetupPose();
-				updateSpinePosition();
+				centerSpine();
 			} else {
 				console.warn(`Skin "${skinName}" not found.`);
 			}
@@ -997,16 +968,9 @@ function App() {
 			const loop = animationQueueRef.current.length === 0;
 			spineInstanceRef.current.state.setAnimation(0, animName, loop);
 			spineInstanceRef.current.state.timeScale = speedValue;
-			updateSpinePosition();
+			centerSpine();
 			setAnimationPlaying(true);
-			const dur = spineInstanceRef.current.skeleton.data.findAnimation(animName)?.duration || 0;
-			setAnimDuration(dur);
-			setTrimStart(0);
-			setTrimEnd(dur);
-			trimStartRef.current = 0;
-			trimEndRef.current = dur;
-			setTrimEnabled(false);
-			trimEnabledRef.current = false;
+			resetTimeline(animName);
 		}
 	};
 
@@ -1061,7 +1025,6 @@ function App() {
 		if (!track) return;
 		const clamped = Math.max(0, Math.min(time, animDuration));
 		track.trackTime = clamped;
-		setAnimTime(clamped);
 	};
 
 	const handleTrimStartChange = (val) => {
@@ -1089,7 +1052,6 @@ function App() {
 		while (usedIndices.includes(nextIndex)) nextIndex++;
 		const animName = availableAnimations[0];
 		spineInstanceRef.current.state.setAnimation(nextIndex, animName, true);
-		spineInstanceRef.current.state.timeScale = speedValue;
 		setAdditionalTracks((prev) => [...prev, { trackIndex: nextIndex, animation: animName, loop: true, alpha: 1.0, mixDuration: 0 }]);
 	};
 
@@ -1111,7 +1073,6 @@ function App() {
 			entry.alpha = alpha;
 			entry.mixDuration = mixDur;
 		}
-		spineInstanceRef.current.state.timeScale = speedValue;
 		setAdditionalTracks((prev) => prev.map((t) => t.trackIndex === trackIndex ? { ...t, animation: animName } : t));
 	};
 
@@ -1149,44 +1110,83 @@ function App() {
 		}
 	};
 
+	const createMarkerContent = (slotName, assetUrl) => {
+		// bone space is y-up (pixi-spine yDown), so content is flipped like region sprites
+		let content;
+		if (assetUrl) {
+			content = new Container();
+			const sprite = Sprite.from(assetUrl);
+			sprite.anchor.set(0.5);
+			sprite.scale.y = -1;
+			content.addChild(sprite);
+		} else {
+			content = new Graphics();
+			const circleRadius = 200;
+			content.beginFill(0xFBF8FF);
+			content.drawCircle(0, 0, circleRadius);
+			content.endFill();
+			const fontSize = circleRadius * 2 * 0.2;
+			const text = new Text(slotName, {
+				fontFamily: "Arial",
+				fontSize: fontSize,
+				fill: "#ea8510",
+				align: "center",
+				wordWrap: true,
+				wordWrapWidth: circleRadius * 2
+			});
+			text.anchor.set(0.5);
+			text.scale.y = -1;
+			content.addChild(text);
+		}
+		content.scale.set(circleScaleValue);
+		return content;
+	};
+
+	const changeAttachedSlot = (slotName, changes) => {
+		const next = attachedSlotsRef.current.map((item) => (item.slotName === slotName ? { ...item, ...changes } : item));
+		attachedSlotsRef.current = next;
+		setAttachedSlots(next);
+	};
+
+	const changeSlotAsset = (slotName, assetUrl) => {
+		const marker = attachedCirclesRef.current[slotName];
+		for (const child of marker.removeChildren()) child.destroy({ children: true });
+		marker.addChild(createMarkerContent(slotName, assetUrl));
+		changeAttachedSlot(slotName, { assetUrl });
+	};
+
 	const addCircleToSlot = (slotName) => {
 		if (!spineInstanceRef.current) return;
 		if (attachedCirclesRef.current[slotName]) return;
-		const circle = new Graphics();
-		const circleRadius = 200;
-		circle.beginFill(0xFBF8FF);
-		circle.drawCircle(0, 0, circleRadius);
-		circle.endFill();
-		circle.scale.set(circleScaleValue);
-		const fontSize = circleRadius * 2 * 0.2;
-		const text = new Text(slotName, {
-			fontFamily: "Arial",
-			fontSize: fontSize,
-			fill: "#ea8510",
-			align: "center",
-			wordWrap: true,
-			wordWrapWidth: circleRadius * 2
-		});
-		text.anchor.set(0.5);
-		circle.addChild(text);
-		for (const sName in attachedCirclesRef.current) {
-			const c = attachedCirclesRef.current[sName];
-			const slot = spineInstanceRef.current.skeleton.findSlot(sName);
-			spineInstanceRef.current.slotContainers[slot.data.index].addChild(c);
-		}
-		attachedCirclesRef.current[slotName] = circle;
-		setAttachedSlots((prev) => (prev.includes(slotName) ? prev : [...prev, slotName]));
+		// the outer container follows the bone (see updateSlots), the content inside keeps the user scale
+		const marker = new Container();
+		marker.addChild(createMarkerContent(slotName, ""));
+		attachedCirclesRef.current[slotName] = marker;
+		const next = [...attachedSlotsRef.current, { slotName, assetUrl: "", mode: slotMode }];
+		attachedSlotsRef.current = next;
+		setAttachedSlots(next);
 	};
 
 	const removeCircleFromSlot = (slotName) => {
 		if (!spineInstanceRef.current) return;
 		const circle = attachedCirclesRef.current[slotName];
 		if (circle) {
-			spineInstanceRef.current.removeChild(circle);
-			circle.destroy();
+			circle.destroy({ children: true });
 			delete attachedCirclesRef.current[slotName];
-			setAttachedSlots((prev) => prev.filter((name) => name !== slotName));
+			const next = attachedSlotsRef.current.filter((item) => item.slotName !== slotName);
+			attachedSlotsRef.current = next;
+			setAttachedSlots(next);
 		}
+	};
+
+	const toggleSlotHidden = (slotName) => {
+		setHiddenSlots((prev) => {
+			const next = new Set(prev);
+			if (next.has(slotName)) next.delete(slotName);
+			else next.add(slotName);
+			hiddenSlotsRef.current = next;
+			return next;
+		});
 	};
 
 	const toggleBoneSelection = (boneName) => {
@@ -1205,7 +1205,16 @@ function App() {
 	const filteredSlots = allSlots.filter((slot) =>
 		slot.toLowerCase().includes(slotFilter.toLowerCase())
 	);
-	const unAttachedSlots = filteredSlots.filter((slot) => !attachedSlots.includes(slot));
+	const unAttachedSlots = filteredSlots.filter((slot) => !attachedSlots.some((item) => item.slotName === slot));
+	const assetOptions = [
+		<option key="" value="">Circle</option>,
+		...slotAssets.map((asset) => <option key={asset.url} value={asset.url}>{asset.name}</option>)
+	];
+	const slotHideButton = (slotName) => (
+		<button style={styles.queueClearButton} onClick={() => toggleSlotHidden(slotName)} title="Hide the whole slot">
+			{hiddenSlots.has(slotName) ? "Show" : "Hide"}
+		</button>
+	);
 
 	const filteredBones = boneNames.filter((name) =>
 		name.toLowerCase().includes(boneFilter.toLowerCase())
@@ -1246,19 +1255,28 @@ function App() {
 				style={{ display: "none" }}
 				onChange={onFolderInputChange}
 			/>
+			<input
+				ref={assetInputRef}
+				type="file"
+				multiple
+				accept="image/*"
+				style={{ display: "none" }}
+				onChange={onAssetInputChange}
+			/>
 			<header style={styles.header}>
 				<div style={styles.headerLeft}>Pixi Spine Viewer Tool</div>
 				<div style={styles.headerRight}>
 					<span style={styles.currentThemeText}>{theme === "dark" ? "Dark" : "Light"}</span>
-					<ThemeToggle theme={theme} toggleTheme={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))} />
+					<ThemeToggle theme={theme} styles={styles} toggleTheme={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))} />
 				</div>
 			</header>
 			<div style={styles.mainContent}>
 				{debugMode && spineLoaded && (
-					<div style={styles.debugPanel}>
+					<div style={{ ...styles.debugPanel, width: debugPanelWidth }}>
+						<div style={{ ...styles.resizeHandle, right: 0 }} onMouseDown={(e) => startPanelResize(e, debugPanelWidth, setDebugPanelWidth, 1)} />
 						<select style={styles.animationsSelect} value={debugEntityType} onChange={(e) => { setDebugEntityType(e.target.value); setDebugFilter(""); }}>
-							<option value="bones">Bones ({boneNames.length})</option>
 							<option value="slots">Slots ({allSlots.length})</option>
+							<option value="bones">Bones ({boneNames.length})</option>
 							<option value="regionAttachments">Regions ({debugEntities.regionAttachments.length})</option>
 							<option value="meshes">Meshes ({debugEntities.meshes.length})</option>
 							<option value="paths">Paths ({debugEntities.paths.length})</option>
@@ -1293,27 +1311,54 @@ function App() {
 							<>
 								<input type="text" placeholder="Filter slots..." value={slotFilter} onChange={(e) => setSlotFilter(e.target.value)} style={styles.animationsSelect} />
 								<div style={styles.debugSlotScaleRow}>
-									<label style={styles.sliderLabel}>Circle Scale: {circleScaleValue.toFixed(2)}</label>
+									<select style={styles.animationsSelect} value={slotMode} onChange={(e) => setSlotMode(e.target.value)} title="How + puts the asset into a slot">
+										<option value="add">Add on top of slot</option>
+										<option value="replace">Replace slot art</option>
+									</select>
+									<label style={styles.sliderLabel}>Asset Scale: {circleScaleValue.toFixed(2)}</label>
 									<input type="range" min="0.01" max="2" step="0.01" value={circleScaleValue} onChange={handleCircleScaleChange} style={styles.input} />
 								</div>
 								{attachedSlots.length > 0 && (
 									<div style={styles.debugAttachedSlots}>
-										{attachedSlots.map((slotName, idx) => (
-											<div key={idx} style={styles.attachedSlotItem}>
-												<span>{slotName}</span>
-												<div style={styles.attachedSlotControls}>
-													<input type="checkbox" defaultChecked={true} onChange={(e) => handleSlotVisibilityChange(slotName, e.target.checked)} />
-													<button style={styles.deleteButton} onClick={() => removeCircleFromSlot(slotName)}>✕</button>
+										{attachedSlots.map((item) => (
+											<div key={item.slotName} style={styles.trackItem}>
+												<div style={styles.trackItemHeader}>
+													<span style={{ ...styles.trackLabel, opacity: hiddenSlots.has(item.slotName) ? 0.4 : 1 }}>{item.slotName}</span>
+													<div style={styles.attachedSlotControls}>
+														{slotHideButton(item.slotName)}
+														<input type="checkbox" title="Show asset" defaultChecked={attachedCirclesRef.current[item.slotName]?.visible !== false} onChange={(e) => handleSlotVisibilityChange(item.slotName, e.target.checked)} />
+														<button style={styles.queueRemoveButton} onClick={() => removeCircleFromSlot(item.slotName)} title="Remove asset">×</button>
+													</div>
+												</div>
+												<div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+													<select style={{ ...styles.animationsSelect, margin: 0, minWidth: 0 }} value={item.assetUrl} onChange={(e) => changeSlotAsset(item.slotName, e.target.value)}>
+														{assetOptions}
+													</select>
+													<button
+														style={styles.queueClearButton}
+														onClick={() => {
+															loadIntoSlotRef.current = item.slotName;
+															assetInputRef.current?.click();
+														}}
+														title="Load an image into this slot"
+													>Load…</button>
+													<select style={{ ...styles.animationsSelect, margin: 0, minWidth: 0 }} value={item.mode} onChange={(e) => changeAttachedSlot(item.slotName, { mode: e.target.value })}>
+														<option value="add">Add</option>
+														<option value="replace">Replace</option>
+													</select>
 												</div>
 											</div>
 										))}
 									</div>
 								)}
 								<div style={styles.bonesList}>
-									{unAttachedSlots.map((slotName, idx) => (
-										<div key={idx} style={styles.slotItem}>
-											<span>{slotName}</span>
-											<button style={styles.unattachedButton} onClick={() => addCircleToSlot(slotName)}>+</button>
+									{unAttachedSlots.map((slotName) => (
+										<div key={slotName} style={styles.slotItem}>
+											<span style={{ opacity: hiddenSlots.has(slotName) ? 0.4 : 1 }}>{slotName}</span>
+											<div style={styles.attachedSlotControls}>
+												{slotHideButton(slotName)}
+												<button style={styles.unattachedButton} onClick={() => addCircleToSlot(slotName)} title="Add a circle to this slot">+</button>
+											</div>
 										</div>
 									))}
 								</div>
@@ -1380,7 +1425,7 @@ function App() {
 							</div>
 						)}
 						<div ref={pixiContainerRef} style={styles.pixiContainer} />
-						{spineLoaded && (						<div style={styles.fpsCounter}>{fps} FPS</div>
+						{spineLoaded && (						<div ref={fpsRef} style={styles.fpsCounter} />
 					)}
 					{spineLoaded && (							<div style={styles.canvasControls}>
 							<button style={styles.canvasPauseButton} onClick={toggleAnimation} title={animationPlaying ? "Pause" : "Play"}>
@@ -1406,7 +1451,8 @@ function App() {
 						{errorMsg && <p style={{ zIndex: 3, position: "relative" }}>{errorMsg}</p>}
 					</div>
 				</div>
-				<div style={styles.sidebar}>
+				<div style={{ ...styles.sidebar, width: sidebarWidth }}>
+					<div style={{ ...styles.resizeHandle, left: 0 }} onMouseDown={(e) => startPanelResize(e, sidebarWidth, setSidebarWidth, -1)} />
 					<div style={styles.fixedArea}>
 						<h3 style={styles.sectionHeader}>Animation</h3>
 						<select style={styles.animationsSelect} value={selectedAnimation} onChange={handleAnimationSelect}>
@@ -1533,9 +1579,7 @@ function App() {
 							<div style={styles.timelineSection}>
 								<div style={styles.timelineHeader}>
 									<span style={styles.sliderLabel}>Timeline</span>
-									<span style={styles.timelineTimeLabel}>
-										{animTime.toFixed(2)}s / {animDuration.toFixed(2)}s
-									</span>
+									<span ref={timeLabelRef} style={styles.timelineTimeLabel} />
 								</div>
 								<div
 									style={styles.timelineTrack}
@@ -1562,10 +1606,7 @@ function App() {
 											width: `${((trimEnd - trimStart) / animDuration) * 100}%`
 										}} />
 									)}
-									<div style={{
-										...styles.timelinePlayhead,
-										left: `${(animTime / animDuration) * 100}%`
-									}} />
+									<div ref={playheadRef} style={styles.timelinePlayhead} />
 								</div>
 								<div style={styles.trimControls}>
 									<label style={styles.trimCheckboxLabel}>

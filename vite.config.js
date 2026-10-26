@@ -3,5 +3,6 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
 	plugins: [react()],
-	base: '/pixi-spine-viewer/'
+	base: '/pixi-spine-viewer/',
+	server: {port: 9876}
 });

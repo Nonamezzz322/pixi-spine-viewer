@@ -61,12 +61,6 @@ export const getStyles = (theme) => {
 			fontSize: `${scaleFactor * 19.2}px`,
 			fontWeight: "bold"
 		},
-		headerCenter: {
-			position: "absolute",
-			left: "50%",
-			transform: "translateX(-50%)",
-			fontSize: `${scaleFactor * 14.4}px`
-		},
 		headerRight: {
 			display: "flex",
 			alignItems: "center",
@@ -74,11 +68,6 @@ export const getStyles = (theme) => {
 		},
 		currentThemeText: {
 			fontSize: `${scaleFactor * 14.4}px`
-		},
-		githubLink: {
-			color: currentTheme.headerText,
-			textDecoration: "none",
-			fontWeight: "bold"
 		},
 		mainContent: {
 			display: "flex",
@@ -119,7 +108,7 @@ export const getStyles = (theme) => {
 			zIndex: 1
 		},
 		sidebar: {
-			width: `${scaleFactor * 300}px`,
+			position: "relative",
 			flexShrink: 0,
 			margin: `${scaleFactor * 10}px`,
 			padding: `${scaleFactor * 10}px`,
@@ -130,6 +119,9 @@ export const getStyles = (theme) => {
 			flexDirection: "column"
 		},
 		fixedArea: {
+			flex: 1,
+			minHeight: 0,
+			overflowY: "auto",
 			marginBottom: `${scaleFactor * 10}px`,
 			paddingBottom: `${scaleFactor * 10}px`
 		},
@@ -200,29 +192,6 @@ export const getStyles = (theme) => {
 			color: currentTheme.buttonText,
 			cursor: "pointer",
 			fontSize: `${scaleFactor * 14.4}px`
-		},
-		deleteButton: {
-			padding: `${scaleFactor * 4}px ${scaleFactor * 8}px`,
-			border: "none",
-			borderRadius: `${scaleFactor * 4}px`,
-			backgroundColor: "#f44336",
-			color: currentTheme.buttonText,
-			cursor: "pointer",
-			fontSize: `${scaleFactor * 14.4}px`
-		},
-		attachedSlotItem: {
-			margin: `${scaleFactor * 4}px 0`,
-			display: "flex",
-			alignItems: "center",
-			justifyContent: "space-between"
-		},
-		unattachedList: {
-			flex: 1,
-			overflowY: "auto",
-			marginTop: `${scaleFactor * 8}px`,
-			border: `1px solid ${currentTheme.inputBorder}`,
-			borderRadius: `${scaleFactor * 4}px`,
-			padding: `${scaleFactor * 8}px`
 		},
 		toggleSwitch: {
 			position: "relative",
@@ -372,20 +341,8 @@ export const getStyles = (theme) => {
 			padding: `${scaleFactor * 2}px ${scaleFactor * 6}px`,
 			borderRadius: `${scaleFactor * 3}px`
 		},
-		bonesPanel: {
-			width: `${scaleFactor * 220}px`,
-			flexShrink: 0,
-			margin: `${scaleFactor * 10}px 0 ${scaleFactor * 10}px ${scaleFactor * 10}px`,
-			padding: `${scaleFactor * 10}px`,
-			borderRadius: `${scaleFactor * 8}px`,
-			backgroundColor: currentTheme.sidebarBg,
-			boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
-			display: "flex",
-			flexDirection: "column",
-			overflow: "hidden"
-		},
 		debugPanel: {
-			width: `${scaleFactor * 220}px`,
+			position: "relative",
 			flexShrink: 0,
 			margin: `${scaleFactor * 10}px 0 ${scaleFactor * 10}px ${scaleFactor * 10}px`,
 			padding: `${scaleFactor * 10}px`,
@@ -396,53 +353,22 @@ export const getStyles = (theme) => {
 			flexDirection: "column",
 			overflow: "hidden"
 		},
-		debugTabs: {
-			display: "flex",
-			gap: `${scaleFactor * 2}px`,
-			marginBottom: `${scaleFactor * 8}px`,
-			borderBottom: `1px solid ${currentTheme.inputBorder}`,
-			paddingBottom: `${scaleFactor * 6}px`
-		},
-		debugTabBtn: {
-			flex: 1,
-			padding: `${scaleFactor * 4}px ${scaleFactor * 6}px`,
-			border: `1px solid ${currentTheme.inputBorder}`,
-			borderRadius: `${scaleFactor * 4}px`,
-			backgroundColor: "transparent",
-			color: currentTheme.sidebarText,
-			cursor: "pointer",
-			fontSize: `${scaleFactor * 11}px`,
-			textAlign: "center"
-		},
-		debugTabActive: {
-			flex: 1,
-			padding: `${scaleFactor * 4}px ${scaleFactor * 6}px`,
-			border: `1px solid ${currentTheme.inputBorder}`,
-			borderRadius: `${scaleFactor * 4}px`,
-			backgroundColor: currentTheme.buttonBg,
-			color: "#ffffff",
-			cursor: "pointer",
-			fontSize: `${scaleFactor * 11}px`,
-			textAlign: "center"
-		},
-		debugFlagsList: {
-			display: "flex",
-			flexDirection: "column",
-			gap: `${scaleFactor * 6}px`
-		},
-		debugFlagItem: {
-			display: "flex",
-			alignItems: "center",
-			gap: `${scaleFactor * 6}px`,
-			fontSize: `${scaleFactor * 13}px`,
-			cursor: "pointer",
-			userSelect: "none",
-			padding: `${scaleFactor * 3}px 0`
+		resizeHandle: {
+			position: "absolute",
+			top: 0,
+			bottom: 0,
+			width: `${scaleFactor * 6}px`,
+			cursor: "col-resize",
+			backgroundColor: "rgba(128,128,128,0.2)",
+			zIndex: 1
 		},
 		debugSlotScaleRow: {
 			marginBottom: `${scaleFactor * 6}px`
 		},
 		debugAttachedSlots: {
+			flexShrink: 0,
+			maxHeight: "45%",
+			overflowY: "auto",
 			marginBottom: `${scaleFactor * 6}px`,
 			borderBottom: `1px solid ${currentTheme.inputBorder}`,
 			paddingBottom: `${scaleFactor * 6}px`
