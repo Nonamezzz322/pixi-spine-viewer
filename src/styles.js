@@ -57,10 +57,20 @@ export const getStyles = (theme) => {
 			justifyContent: "space-between",
 			borderBottom: "1px solid rgba(255,255,255,0.3)"
 		},
-		headerLeft: {
-			fontSize: `${scaleFactor * 19.2}px`,
-			fontWeight: "bold"
+		headerTabs: {
+			display: "flex",
+			gap: `${scaleFactor * 4}px`
 		},
+		headerTab: (active) => ({
+			padding: `${scaleFactor * 4}px ${scaleFactor * 14}px`,
+			border: "none",
+			borderRadius: `${scaleFactor * 4}px`,
+			backgroundColor: active ? "rgba(255,255,255,0.2)" : "transparent",
+			color: currentTheme.headerText,
+			fontSize: `${scaleFactor * 16}px`,
+			fontWeight: active ? "bold" : "normal",
+			cursor: "pointer"
+		}),
 		headerRight: {
 			display: "flex",
 			alignItems: "center",
@@ -469,6 +479,177 @@ export const getStyles = (theme) => {
 			width: `${scaleFactor * 42}px`,
 			textAlign: "right",
 			flexShrink: 0
+		},
+		addButtons: {
+			display: "grid",
+			gridTemplateColumns: "1fr 1fr",
+			gap: `${scaleFactor * 4}px`,
+			marginBottom: `${scaleFactor * 10}px`
+		},
+		addButton: {
+			padding: `${scaleFactor * 6}px`,
+			border: "none",
+			borderRadius: `${scaleFactor * 4}px`,
+			backgroundColor: currentTheme.buttonBg,
+			color: currentTheme.buttonText,
+			cursor: "pointer",
+			fontSize: `${scaleFactor * 13}px`
+		},
+		layerItem: {
+			display: "flex",
+			alignItems: "center",
+			gap: `${scaleFactor * 4}px`,
+			padding: `${scaleFactor * 3}px ${scaleFactor * 6}px`,
+			fontSize: `${scaleFactor * 12}px`,
+			cursor: "pointer",
+			borderRadius: `${scaleFactor * 2}px`,
+			marginBottom: `${scaleFactor * 1}px`,
+			userSelect: "none"
+		},
+		layerName: {
+			flex: 1,
+			overflow: "hidden",
+			textOverflow: "ellipsis",
+			whiteSpace: "nowrap"
+		},
+		fieldRow: {
+			display: "flex",
+			alignItems: "center",
+			gap: `${scaleFactor * 6}px`,
+			marginBottom: `${scaleFactor * 4}px`,
+			fontSize: `${scaleFactor * 12}px`
+		},
+		fieldLabel: {
+			width: `${scaleFactor * 90}px`,
+			flexShrink: 0
+		},
+		fieldInput: {
+			flex: 1,
+			minWidth: 0,
+			padding: `${scaleFactor * 3}px ${scaleFactor * 4}px`,
+			border: `1px solid ${currentTheme.inputBorder}`,
+			borderRadius: `${scaleFactor * 3}px`,
+			backgroundColor: currentTheme.inputBg,
+			color: currentTheme.sidebarText,
+			fontSize: `${scaleFactor * 12}px`,
+			boxSizing: "border-box"
+		},
+		jsonInput: {
+			width: "100%",
+			boxSizing: "border-box",
+			padding: `${scaleFactor * 4}px`,
+			border: `1px solid ${currentTheme.inputBorder}`,
+			borderRadius: `${scaleFactor * 3}px`,
+			backgroundColor: currentTheme.inputBg,
+			color: currentTheme.sidebarText,
+			fontFamily: "monospace",
+			fontSize: `${scaleFactor * 11}px`,
+			resize: "vertical"
+		},
+		sceneBar: {
+			position: "absolute",
+			top: `${scaleFactor * 10}px`,
+			display: "flex",
+			gap: `${scaleFactor * 4}px`,
+			zIndex: 3
+		},
+		iconButton: (active) => ({
+			width: `${scaleFactor * 40}px`,
+			height: `${scaleFactor * 40}px`,
+			display: "flex",
+			alignItems: "center",
+			justifyContent: "center",
+			border: "none",
+			borderRadius: `${scaleFactor * 6}px`,
+			backgroundColor: active ? "#6699FF" : "rgba(0,0,0,0.5)",
+			color: "#ffffff",
+			cursor: "pointer",
+			padding: 0
+		}),
+		phoneBezel: {
+			position: "absolute",
+			backgroundColor: "#0d0d0d",
+			boxShadow: "0 0 0 2px #3a3a3a, 0 8px 30px rgba(0,0,0,0.45)",
+			zIndex: 0
+		},
+		phoneIsland: {
+			position: "absolute",
+			backgroundColor: "#000000",
+			borderRadius: "999px",
+			zIndex: 2,
+			pointerEvents: "none"
+		},
+		phoneCaption: {
+			position: "absolute",
+			left: 0,
+			right: 0,
+			textAlign: "center",
+			fontSize: `${scaleFactor * 12}px`,
+			color: theme === "dark" ? "#bbbbbb" : "#666666",
+			zIndex: 2,
+			pointerEvents: "none"
+		},
+		zoomSlider: {
+			width: `${scaleFactor * 220}px`,
+			margin: 0,
+			cursor: "pointer"
+		},
+		zoomValue: {
+			width: `${scaleFactor * 44}px`,
+			textAlign: "right",
+			fontFamily: "monospace"
+		},
+		glyphGrid: {
+			display: "grid",
+			gridTemplateColumns: "repeat(auto-fill, minmax(52px, 1fr))",
+			gap: `${scaleFactor * 4}px`,
+			margin: `${scaleFactor * 4}px 0`
+		},
+		glyphCell: {
+			position: "relative",
+			display: "flex",
+			flexDirection: "column",
+			alignItems: "center",
+			gap: `${scaleFactor * 2}px`,
+			padding: `${scaleFactor * 3}px`,
+			border: `1px solid ${currentTheme.inputBorder}`,
+			borderRadius: `${scaleFactor * 3}px`,
+			background: "repeating-conic-gradient(#9a9a9a 0 25%, #7a7a7a 0 50%) 50% / 10px 10px"
+		},
+		glyphImage: {
+			height: "40px",
+			maxWidth: "100%",
+			objectFit: "contain"
+		},
+		glyphChar: {
+			width: "100%",
+			boxSizing: "border-box",
+			textAlign: "center",
+			padding: 0,
+			border: `1px solid ${currentTheme.inputBorder}`,
+			borderRadius: `${scaleFactor * 2}px`,
+			backgroundColor: currentTheme.inputBg,
+			color: currentTheme.sidebarText,
+			fontSize: `${scaleFactor * 13}px`
+		},
+		glyphDelete: {
+			position: "absolute",
+			top: 0,
+			right: 0,
+			background: "rgba(0,0,0,0.5)",
+			border: "none",
+			borderRadius: `0 ${scaleFactor * 3}px 0 ${scaleFactor * 3}px`,
+			color: "#ffffff",
+			cursor: "pointer",
+			fontSize: `${scaleFactor * 12}px`,
+			lineHeight: 1,
+			padding: `${scaleFactor * 1}px ${scaleFactor * 4}px`
+		},
+		errorText: {
+			color: "#f44336",
+			fontSize: `${scaleFactor * 12}px`,
+			marginBottom: `${scaleFactor * 6}px`,
+			wordBreak: "break-word"
 		},
 		trackItem: {
 			border: `1px solid ${currentTheme.inputBorder}`,

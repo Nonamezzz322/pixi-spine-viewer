@@ -1,125 +1,8 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
-import { Application, BaseTexture, Container, Graphics, Matrix, Sprite, Text, filters } from "pixi.js";
-import { Spine, TextureAtlas } from "pixi-spine";
-import { AtlasAttachmentLoader, SkeletonJson } from "@pixi-spine/runtime-4.1";
+import { Application, Container, Graphics, Matrix, Sprite, Text, filters } from "pixi.js";
 import { getStyles } from "./styles";
-import { findImageFile, findSpineFiles } from "./files";
-
-function expandSequencePath(basePath, seq) {
-	const count = seq.count || 0;
-	const digits = seq.digits || 0;
-	const start = seq.start !== undefined ? seq.start : 1;
-	const paths = [];
-	for (let i = 0; i < count; i++) {
-		const frame = String(start + i);
-		paths.push(basePath + "0".repeat(Math.max(0, digits - frame.length)) + frame);
-	}
-	return paths;
-}
-
-function extractImageNames(jsonData) {
-	const imageNames = new Set();
-	const skins = jsonData.skins;
-	if (!skins) return imageNames;
-	const skinList = Array.isArray(skins)
-		? skins
-		: Object.keys(skins).map((k) => ({ attachments: skins[k] }));
-	for (const skin of skinList) {
-		const slots = skin.attachments;
-		if (!slots || typeof slots !== "object") continue;
-		for (const slotName in slots) {
-			const atts = slots[slotName];
-			for (const attKey in atts) {
-				const att = atts[attKey];
-				const type = att.type || "region";
-				if (type === "region" || type === "mesh" || type === "linkedmesh" || type === "weightedmesh" || type === "skinnedmesh") {
-					const name = att.name || attKey;
-					const path = att.path || name;
-					if (att.sequence) {
-						for (const framePath of expandSequencePath(path, att.sequence)) {
-							imageNames.add(framePath);
-						}
-					} else {
-						imageNames.add(path);
-					}
-				}
-			}
-		}
-	}
-	return imageNames;
-}
-
-const PLACEHOLDER_URL = (() => {
-	const c = document.createElement("canvas");
-	c.width = 2; c.height = 2;
-	return c.toDataURL();
-})();
-
-function generateAtlasFromImages(jsonData, fileURLs) {
-	return new Promise((resolve, reject) => {
-		const imageNames = extractImageNames(jsonData);
-		if (imageNames.size === 0) {
-			reject(new Error("No image references found in JSON"));
-			return;
-		}
-		console.log(`[SpineViewer] generateAtlasFromImages: ${imageNames.size} images to load`);
-		const entries = [];
-		let pending = imageNames.size;
-		const checkDone = () => {
-			if (pending > 0) return;
-			if (entries.length === 0) {
-				reject(new Error("Could not load any referenced images"));
-				return;
-			}
-			console.log(`[SpineViewer] All ${entries.length} images loaded, generating atlas`);
-			// group regions by fileName (multiple regions can share the same image file)
-			const pages = new Map();
-			for (const e of entries) {
-				if (!pages.has(e.fileName)) pages.set(e.fileName, { width: e.width, height: e.height, regions: [] });
-				pages.get(e.fileName).regions.push(e);
-			}
-			let atlas = "";
-			let first = true;
-			for (const [fileName, page] of pages) {
-				if (!first) atlas += "\n";
-				first = false;
-				atlas += `${fileName}\nsize: ${page.width},${page.height}\nformat: RGBA8888\nfilter: Linear,Linear\nrepeat: none\n`;
-				for (const r of page.regions) {
-					atlas += `${r.regionName}\n  rotate: false\n  xy: 0, 0\n  size: ${r.width}, ${r.height}\n  orig: ${r.width}, ${r.height}\n  offset: 0, 0\n  index: -1\n`;
-				}
-			}
-			resolve(atlas);
-		};
-		for (const imgName of imageNames) {
-			const match = findImageFile(imgName, fileURLs);
-			if (!match) {
-				// create placeholder so region still exists in atlas
-				console.warn("Image not found for region:", imgName, "— using placeholder");
-				const placeholderKey = "__placeholder_" + imgName + ".png";
-				fileURLs[placeholderKey] = PLACEHOLDER_URL;
-				entries.push({ regionName: imgName, fileName: placeholderKey, width: 2, height: 2 });
-				pending--;
-				checkDone();
-				continue;
-			}
-			const img = new Image();
-			img.onload = () => {
-				entries.push({ regionName: imgName, fileName: match.fileName, width: img.naturalWidth, height: img.naturalHeight });
-				pending--;
-				checkDone();
-			};
-			img.onerror = () => {
-				console.warn("Failed to load image for region:", imgName, "— using placeholder");
-				const placeholderKey = "__placeholder_" + imgName + ".png";
-				fileURLs[placeholderKey] = PLACEHOLDER_URL;
-				entries.push({ regionName: imgName, fileName: placeholderKey, width: 2, height: 2 });
-				pending--;
-				checkDone();
-			};
-			img.src = match.url;
-		}
-	});
-}
+import { createSkeletonData, createSpine, readSpineFiles } from "./spine";
+import Constructor from "./Constructor";
 
 const markerMatrix = new Matrix();
 
@@ -146,6 +29,7 @@ function App() {
 	const [attachedSlots, setAttachedSlots] = useState([]);
 	const [circleScaleValue, setCircleScaleValue] = useState(1.0);
 	const [theme, setTheme] = useState("dark");
+	const [tab, setTab] = useState("viewer");
 	const [debugMode, setDebugMode] = useState(false);
 	const [animationQueue, setAnimationQueue] = useState([]);
 	const [queueLoop, setQueueLoop] = useState(false);
@@ -240,6 +124,13 @@ function App() {
 	}, []);
 
 	useEffect(() => {
+		const ticker = pixiAppRef.current?.ticker;
+		if (!ticker) return;
+		if (tab === "viewer") ticker.start();
+		else ticker.stop();
+	}, [tab]);
+
+	useEffect(() => {
 		if (!pixiAppRef.current) return;
 		const ticker = pixiAppRef.current.ticker;
 		const updateFps = () => {
@@ -256,17 +147,21 @@ function App() {
 			if (!spineInstanceRef.current) return;
 			const track = spineInstanceRef.current.state.getCurrent(0);
 			if (!track) return;
-			const t = track.getAnimationTime();
+			let t = track.getAnimationTime();
 			const dur = track.animation ? track.animation.duration : 0;
-			// written to the DOM directly: React state here would re-render the whole app every frame
-			if (playheadRef.current && dur > 0) playheadRef.current.style.left = `${(t / dur) * 100}%`;
-			if (timeLabelRef.current) timeLabelRef.current.textContent = `${t.toFixed(2)}s / ${dur.toFixed(2)}s`;
+			// trim first, so the label never shows the frame before the jump
 			if (dur > 0 && trimEnabledRef.current) {
 				const ts = trimStartRef.current;
 				const te = trimEndRef.current;
 				// a looping track wraps to 0 before it reaches te, so check both ends
-				if (t < ts || t >= te) track.trackTime += ts - t;
+				if (t < ts || t >= te) {
+					track.trackTime += ts - t;
+					t = ts;
+				}
 			}
+			// written to the DOM directly: React state here would re-render the whole app every frame
+			if (playheadRef.current && dur > 0) playheadRef.current.style.left = `${(t / dur) * 100}%`;
+			if (timeLabelRef.current) timeLabelRef.current.textContent = `${t.toFixed(2)}s / ${dur.toFixed(2)}s`;
 		};
 		ticker.add(updateTimeline);
 		return () => ticker.remove(updateTimeline);
@@ -388,30 +283,17 @@ function App() {
 			for (const texture of new Set(pageTexturesRef.current)) texture.destroy();
 			pageTexturesRef.current = [];
 			for (const url of Object.values(filesDataRef.current)) URL.revokeObjectURL(url);
+			filesDataRef.current = {};
 			if (!files || files.length === 0) {
 				setErrorMsg("Files not found");
 				return;
 			}
-			const filesMap = {};
-			for (let i = 0; i < files.length; i++) {
-				filesMap[files[i].name] = files[i];
-			}
-			const fileURLs = {};
-			for (const name in filesMap) {
-				fileURLs[name] = URL.createObjectURL(filesMap[name]);
-			}
-			filesDataRef.current = fileURLs;
-			const { jsonFileName, atlasFileName, error } = findSpineFiles(Object.keys(filesMap));
-			if (error) {
-				setErrorMsg(error);
-				return;
-			}
 			try {
-				const jsonData = JSON.parse(await filesMap[jsonFileName].text());
-				const atlasText = atlasFileName
-					? await filesMap[atlasFileName].text()
-					: await generateAtlasFromImages(jsonData, fileURLs);
-				createSpineAnimation(jsonData, atlasText, fileURLs);
+				const { jsonData, atlasText, fileURLs } = await readSpineFiles(files);
+				filesDataRef.current = fileURLs;
+				const { skeletonData, pageTextures } = await createSkeletonData(jsonData, atlasText, fileURLs);
+				pageTexturesRef.current = pageTextures;
+				createSpineAnimation(skeletonData);
 			} catch (err) {
 				console.error("Error loading spine files:", err);
 				setErrorMsg("Error loading spine files: " + err.message);
@@ -748,183 +630,97 @@ function App() {
 		trimEnabledRef.current = false;
 	};
 
-	const createSpineAnimation = (jsonData, atlasText, fileURLs) => {
+	const createSpineAnimation = (skeletonData) => {
 		if (!pixiAppRef.current) return;
-		function getTextureForLine(line, fileURLs) {
-			if (fileURLs[line]) return BaseTexture.from(fileURLs[line]);
-			const lowerLine = line.toLowerCase();
-			for (const key in fileURLs) {
-				if (key.toLowerCase() === lowerLine) return BaseTexture.from(fileURLs[key]);
-			}
-			const baseLine = lowerLine.split("/").pop();
-			for (const key in fileURLs) {
-				if (key.split("/").pop().toLowerCase() === baseLine) return BaseTexture.from(fileURLs[key]);
-			}
-			return null;
-		}
 		try {
-			const pageTextures = [];
-			const spineAtlas = new TextureAtlas(atlasText, (line, callback) => {
-				const texture = getTextureForLine(line, fileURLs);
-				if (texture) {
-					pageTextures.push(texture);
-					callback(texture);
-				} else {
-					console.warn("Texture not found for page:", line, "— using placeholder");
-					const ph = BaseTexture.from(PLACEHOLDER_URL);
-					pageTextures.push(ph);
-					callback(ph);
+			const skins = skeletonData.skins.map((skin) => skin.name);
+			setAvailableSkins(skins);
+			setSelectedSkin(skins[0] || "");
+			const spineAnimation = createSpine(skeletonData);
+
+			// pixi-spine updates slots inside update() during render, so slot overrides run right after it
+			const origUpdate = spineAnimation.update.bind(spineAnimation);
+			spineAnimation.update = (dt) => {
+				origUpdate(dt);
+				updateSlots();
+			};
+
+			spineAnimation.autoUpdate = false;
+			spineAnimation.x = pixiAppRef.current.screen.width / 2;
+			spineAnimation.y = pixiAppRef.current.screen.height / 2;
+			spineAnimation.scale.set(scaleValue);
+			spineInstanceRef.current = spineAnimation;
+			pixiAppRef.current.stage.addChild(spineAnimation);
+			if (skeletonData.animations.length > 0) {
+				const animName = skeletonData.animations[0].name;
+				spineAnimation.state.setAnimation(0, animName, true);
+				setAnimationPlaying(true);
+				setAvailableAnimations(skeletonData.animations.map((anim) => anim.name));
+				setSelectedAnimation(animName);
+				spineAnimation.state.timeScale = speedValue;
+				resetTimeline(animName);
+			}
+			spineAnimation.autoUpdate = true;
+			requestAnimationFrame(() => {
+				try {
+					spineAnimation.skeleton.updateWorldTransform();
+					const bounds = spineAnimation.getLocalBounds();
+					spineAnimation.pivot.set(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+				} catch (e) {
+					console.warn("Deferred bounds calculation failed, using fallback positioning:", e);
+				}
+				updateSpinePosition();
+			});
+			const names = skeletonData.bones.map((b) => b.name);
+			setBoneNames(names);
+			const entities = { regionAttachments: [], meshes: [], paths: [], boundingBoxes: [], clipping: [] };
+			const seen = new Set();
+			for (const skin of skeletonData.skins) {
+				if (skin.attachments) {
+					for (let si = 0; si < skin.attachments.length; si++) {
+						const slotAtts = skin.attachments[si];
+						if (!slotAtts) continue;
+						const slotName = skeletonData.slots[si] ? skeletonData.slots[si].name : `slot_${si}`;
+						for (const attName in slotAtts) {
+							const att = slotAtts[attName];
+							const key = `${slotName}/${attName}`;
+							if (seen.has(key)) continue;
+							seen.add(key);
+							if (att.type === 0) entities.regionAttachments.push(key);
+							else if (att.type === 1) entities.boundingBoxes.push(key);
+							else if (att.type === 2) entities.meshes.push(key);
+							else if (att.type === 4) entities.paths.push(key);
+							else if (att.type === 6) entities.clipping.push(key);
+						}
+					}
+				}
+			}
+			setDebugEntities(entities);
+			spineAnimation.state.addListener({
+				complete: (entry) => {
+					// the listener gets every track, and a looping entry fires on every loop
+					if (entry.trackIndex !== 0) return;
+					const queue = animationQueueRef.current;
+					if (queue.length === 0) return;
+					const nextIdx = queueIndexRef.current + 1;
+					if (nextIdx < queue.length) {
+						queueIndexRef.current = nextIdx;
+						setQueueIndex(nextIdx);
+						setSelectedAnimation(queue[nextIdx]);
+						const isLast = nextIdx === queue.length - 1;
+						spineAnimation.state.setAnimation(0, queue[nextIdx], isLast && !queueLoopRef.current);
+						resetTimeline(queue[nextIdx]);
+					} else if (queueLoopRef.current) {
+						queueIndexRef.current = 0;
+						setQueueIndex(0);
+						setSelectedAnimation(queue[0]);
+						spineAnimation.state.setAnimation(0, queue[0], false);
+						resetTimeline(queue[0]);
+					}
+					// else: the last item keeps looping
 				}
 			});
-
-			pageTexturesRef.current = pageTextures;
-			const pendingTextures = pageTextures.filter((t) => !t.valid);
-			console.log(`[SpineViewer] Atlas: ${spineAtlas.pages.length} pages, ${spineAtlas.regions.length} regions, ${pendingTextures.length} pending textures`);
-			const finishSetup = () => { try {
-				console.log("[SpineViewer] finishSetup started");
-				const atlasLoader = new AtlasAttachmentLoader(spineAtlas);
-				const skeletonJson = new SkeletonJson(atlasLoader);
-				const skeletonData = skeletonJson.readSkeletonData(jsonData);
-
-				// Pre-set region for sequence attachments so Spine constructor
-				// can create meshes with valid textures
-				for (const skin of skeletonData.skins) {
-					if (skin.attachments) {
-						for (let si = 0; si < skin.attachments.length; si++) {
-							const slotAtts = skin.attachments[si];
-							if (!slotAtts) continue;
-							for (const attName in slotAtts) {
-								const att = slotAtts[attName];
-								if (att && att.sequence && !att.region) {
-									att.region = att.sequence.regions[att.sequence.setupIndex];
-								}
-							}
-						}
-					}
-				}
-
-				const skins = skeletonData.skins.map((skin) => skin.name);
-				setAvailableSkins(skins);
-				setSelectedSkin(skins[0] || "");
-				const spineAnimation = new Spine(skeletonData);
-
-				// Patch setMeshRegion to guard against null textures
-				const origSetMeshRegion = spineAnimation.setMeshRegion.bind(spineAnimation);
-				spineAnimation.setMeshRegion = (attachment, mesh, region) => {
-					if (!region || !region.texture) return;
-					origSetMeshRegion(attachment, mesh, region);
-				};
-
-				// pixi-spine updates slots inside update() during render, so slot overrides run right after it
-				const origUpdate = spineAnimation.update.bind(spineAnimation);
-				spineAnimation.update = (dt) => {
-					origUpdate(dt);
-					updateSlots();
-				};
-
-				spineAnimation.autoUpdate = false;
-				spineAnimation.x = pixiAppRef.current.screen.width / 2;
-				spineAnimation.y = pixiAppRef.current.screen.height / 2;
-				spineAnimation.scale.set(scaleValue);
-				spineInstanceRef.current = spineAnimation;
-				pixiAppRef.current.stage.addChild(spineAnimation);
-				if (skeletonData.animations.length > 0) {
-					const animName = skeletonData.animations[0].name;
-					spineAnimation.state.setAnimation(0, animName, true);
-					setAnimationPlaying(true);
-					setAvailableAnimations(skeletonData.animations.map((anim) => anim.name));
-					setSelectedAnimation(animName);
-					spineAnimation.state.timeScale = speedValue;
-					resetTimeline(animName);
-				}
-				spineAnimation.autoUpdate = true;
-				requestAnimationFrame(() => {
-					try {
-						spineAnimation.skeleton.updateWorldTransform();
-						const bounds = spineAnimation.getLocalBounds();
-						spineAnimation.pivot.set(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-					} catch (e) {
-						console.warn("Deferred bounds calculation failed, using fallback positioning:", e);
-					}
-					updateSpinePosition();
-				});
-				const names = skeletonData.bones.map((b) => b.name);
-				setBoneNames(names);
-				const entities = { regionAttachments: [], meshes: [], paths: [], boundingBoxes: [], clipping: [] };
-				const seen = new Set();
-				for (const skin of skeletonData.skins) {
-					if (skin.attachments) {
-						for (let si = 0; si < skin.attachments.length; si++) {
-							const slotAtts = skin.attachments[si];
-							if (!slotAtts) continue;
-							const slotName = skeletonData.slots[si] ? skeletonData.slots[si].name : `slot_${si}`;
-							for (const attName in slotAtts) {
-								const att = slotAtts[attName];
-								const key = `${slotName}/${attName}`;
-								if (seen.has(key)) continue;
-								seen.add(key);
-								if (att.type === 0) entities.regionAttachments.push(key);
-								else if (att.type === 1) entities.boundingBoxes.push(key);
-								else if (att.type === 2) entities.meshes.push(key);
-								else if (att.type === 4) entities.paths.push(key);
-								else if (att.type === 6) entities.clipping.push(key);
-							}
-						}
-					}
-				}
-				setDebugEntities(entities);
-				spineAnimation.state.addListener({
-					complete: (entry) => {
-						// the listener gets every track, and a looping entry fires on every loop
-						if (entry.trackIndex !== 0) return;
-						const queue = animationQueueRef.current;
-						if (queue.length === 0) return;
-						const nextIdx = queueIndexRef.current + 1;
-						if (nextIdx < queue.length) {
-							queueIndexRef.current = nextIdx;
-							setQueueIndex(nextIdx);
-							setSelectedAnimation(queue[nextIdx]);
-							const isLast = nextIdx === queue.length - 1;
-							spineAnimation.state.setAnimation(0, queue[nextIdx], isLast && !queueLoopRef.current);
-							resetTimeline(queue[nextIdx]);
-						} else if (queueLoopRef.current) {
-							queueIndexRef.current = 0;
-							setQueueIndex(0);
-							setSelectedAnimation(queue[0]);
-							spineAnimation.state.setAnimation(0, queue[0], false);
-							resetTimeline(queue[0]);
-						}
-						// else: the last item keeps looping
-					}
-				});
-				setSpineLoaded(true);
-			} catch (err) {
-				console.error("Error in finishSetup:", err);
-				setErrorMsg("Error creating Spine animation: " + err.message);
-			} };
-
-			if (pendingTextures.length > 0) {
-				let loaded = 0;
-				const onLoaded = () => {
-					loaded++;
-					if (loaded >= pendingTextures.length) {
-						finishSetup();
-					}
-				};
-				for (const tex of pendingTextures) {
-					if (tex.valid) {
-						loaded++;
-					} else {
-						tex.once("loaded", onLoaded);
-						tex.once("error", onLoaded);
-					}
-				}
-				if (loaded >= pendingTextures.length) {
-					finishSetup();
-				}
-			} else {
-				finishSetup();
-			}
+			setSpineLoaded(true);
 		} catch (err) {
 			console.error("Error creating Spine animation:", err);
 			setErrorMsg("Error creating Spine animation: " + err.message);
@@ -1264,13 +1060,16 @@ function App() {
 				onChange={onAssetInputChange}
 			/>
 			<header style={styles.header}>
-				<div style={styles.headerLeft}>Pixi Spine Viewer Tool</div>
+				<div style={styles.headerTabs}>
+					<button style={styles.headerTab(tab === "viewer")} onClick={() => setTab("viewer")}>Spine Viewer</button>
+					<button style={styles.headerTab(tab === "constructor")} onClick={() => setTab("constructor")}>Spine Constructor</button>
+				</div>
 				<div style={styles.headerRight}>
 					<span style={styles.currentThemeText}>{theme === "dark" ? "Dark" : "Light"}</span>
 					<ThemeToggle theme={theme} styles={styles} toggleTheme={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))} />
 				</div>
 			</header>
-			<div style={styles.mainContent}>
+			<div style={{ ...styles.mainContent, display: tab === "viewer" ? "flex" : "none" }}>
 				{debugMode && spineLoaded && (
 					<div style={{ ...styles.debugPanel, width: debugPanelWidth }}>
 						<div style={{ ...styles.resizeHandle, right: 0 }} onMouseDown={(e) => startPanelResize(e, debugPanelWidth, setDebugPanelWidth, 1)} />
@@ -1656,6 +1455,7 @@ function App() {
 					</div>
 				</div>
 			</div>
+			<Constructor styles={styles} active={tab === "constructor"} />
 		</div>
 	);
 }
