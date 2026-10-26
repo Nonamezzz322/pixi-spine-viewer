@@ -1,18 +1,18 @@
 // Where every picked file came from, so the scene can read the same files again after a reload.
 // A page can not open a file by its path; the File System Access API (Chrome, Edge) gives handles
 // that can be kept in IndexedDB and read later, after the user allows it once more if the browser asks.
-import { readSceneZip } from "./scene";
+// An imported scene zip is kept whole instead, so it is read again in any browser without asking.
 
 const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"];
+const STORES = ["handles", "sources", "zip"];
 const sources = new WeakMap();
 let database = null;
 
 const openDatabase = () => {
 	database ||= new Promise((resolve, reject) => {
-		const request = indexedDB.open("pixi-spine-viewer", 1);
+		const request = indexedDB.open("pixi-spine-viewer", 2);
 		request.onupgradeneeded = () => {
-			request.result.createObjectStore("handles");
-			request.result.createObjectStore("sources");
+			for (const store of STORES) if (!request.result.objectStoreNames.contains(store)) request.result.createObjectStore(store);
 		};
 		request.onsuccess = () => resolve(request.result);
 		request.onerror = () => reject(request.error);
@@ -25,17 +25,31 @@ const useStore = async (store, mode, action) => {
 	return new Promise((resolve, reject) => {
 		const transaction = db.transaction(store, mode);
 		const request = action(transaction.objectStore(store));
-		transaction.oncomplete = () => resolve(request.result);
+		transaction.oncomplete = () => resolve(request?.result);
 		transaction.onerror = () => reject(transaction.error);
 	});
 };
 
 export const canKeepFileAccess = () => typeof window.showOpenFilePicker === "function";
 
-// the source of a file picked in this session: { handleId, path } and for a file from a zip also { entry }
+// the source of a file picked in this session: { handleId, path }
 export const getPickedSource = (file) => sources.get(file);
 
 export const saveSource = (assetPath, source) => useStore("sources", "readwrite", (store) => store.put(source, assetPath));
+
+// only the last imported zip is kept; it is newer than files picked before under the same paths
+export const saveImportedZip = async (zipFile, paths) => {
+	// a copy of the bytes: Chrome keeps a picked file only as a link to it on the disk
+	const copy = new File([await zipFile.arrayBuffer()], zipFile.name);
+	await useStore("zip", "readwrite", (store) => store.put(copy, "last"));
+	await useStore("sources", "readwrite", (store) => {
+		for (const path of paths) store.delete(path);
+	});
+};
+
+export const getImportedZip = () => useStore("zip", "readonly", (store) => store.get("last"));
+
+export const clearSavedFiles = () => Promise.all(STORES.map((name) => useStore(name, "readwrite", (store) => store.clear())));
 
 const toPickerTypes = (accept) => {
 	const extensions = accept.split(",").map((item) => item.trim()).flatMap((item) => (item === "image/*" ? IMAGE_EXTENSIONS : item.startsWith(".") ? [item] : []));
@@ -77,7 +91,7 @@ export async function pickFilesKeepingAccess(accept, folder) {
 
 // reads a saved file from where it was picked: null when the browser wants the user to allow access,
 // an error when the file is not there any more; askAccess may show the browser's prompt (only inside a click)
-export async function readSavedFile(assetPath, askAccess, zipCache) {
+export async function readSavedFile(assetPath, askAccess) {
 	const source = await useStore("sources", "readonly", (store) => store.get(assetPath));
 	if (!source) throw new Error(`no saved source for ${assetPath}`);
 	const handle = await useStore("handles", "readonly", (store) => store.get(source.handleId));
@@ -90,11 +104,5 @@ export async function readSavedFile(assetPath, askAccess, zipCache) {
 		fileHandle = i < source.path.length - 1 ? await fileHandle.getDirectoryHandle(name) : await fileHandle.getFileHandle(name);
 	}
 	const file = await fileHandle.getFile();
-	if (!source.entry) return new File([file], assetPath, { type: file.type, lastModified: file.lastModified });
-	// a file that came from an imported scene zip: the zip is read once per restore
-	const zipKey = `${source.handleId}/${source.path.join("/")}`;
-	if (!zipCache.has(zipKey)) zipCache.set(zipKey, readSceneZip(file));
-	const found = (await zipCache.get(zipKey)).files.get(source.entry);
-	if (!found) throw new Error(`${source.entry} is not in the zip any more`);
-	return found;
+	return new File([file], assetPath, { type: file.type, lastModified: file.lastModified });
 }

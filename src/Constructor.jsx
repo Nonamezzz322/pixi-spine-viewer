@@ -6,7 +6,7 @@ import { Field, JsonBox, NumberInput } from "./fields";
 import { COIN_FRAMES, EMITTER_PRESETS, createPresetConfig, loadCoinFrames } from "./presets";
 import { exportSheet, getFontFiles, installBitmapFont, loadDefaultBitmapFont, readFntGlyphs, readImageGlyphs, readSavedFont, readSheetGlyphs, removeBitmapFont, serializeFont } from "./bitmapFonts";
 import { SCENE_KEY, createSceneZip, downloadFile, findAssetFile, getElementFiles, readSceneZip, serializeElement } from "./scene";
-import { canKeepFileAccess, getPickedSource, pickFilesKeepingAccess, readSavedFile, saveSource } from "./fileSources";
+import { canKeepFileAccess, clearSavedFiles, getImportedZip, getPickedSource, pickFilesKeepingAccess, readSavedFile, saveImportedZip, saveSource } from "./fileSources";
 import { DEFAULT_MASK_POINTS, findPolygonHandle, getEdgeMiddle, isInsidePolygon } from "./polygon";
 import TextStyleEditor from "./TextStyleEditor";
 import BitmapFontEditor from "./BitmapFontEditor";
@@ -1145,11 +1145,10 @@ export default function Constructor({ styles, active }) {
 	// reads the scene's files again from where they were picked; returns the paths that wait for the user to allow access
 	const readSavedFiles = async (paths, askAccess) => {
 		const waiting = [];
-		const zipCache = new Map();
 		for (const path of paths) {
 			if (assetsRef.current.has(path)) continue;
 			try {
-				const file = await readSavedFile(path, askAccess, zipCache);
+				const file = await readSavedFile(path, askAccess);
 				if (file) assetsRef.current.set(path, file);
 				else waiting.push(path);
 			} catch {
@@ -1262,6 +1261,9 @@ export default function Constructor({ styles, active }) {
 		try {
 			if (scene?.elements?.length) {
 				const waiting = await readSavedFiles(getSceneFiles(scene), false);
+				// files of the last imported zip, unless a file picked later waits for access under the same path
+				const zip = await getImportedZip().then((file) => file && readSceneZip(file)).catch(() => null);
+				for (const [path, file] of zip?.files || []) if (!assetsRef.current.has(path) && !waiting.includes(path)) assetsRef.current.set(path, file);
 				await loadScene(scene, getAssetFile);
 				setFilesToAllow(waiting);
 				// files that only wait for access are not reported as missing
@@ -1314,20 +1316,21 @@ export default function Constructor({ styles, active }) {
 		try {
 			const { scene, files: zipFiles } = await readSceneZip(zipFile);
 			assetsRef.current = zipFiles;
-			// after a reload these files are read again from the same zip
-			const zipSource = getPickedSource(zipFile);
-			if (zipSource) for (const path of zipFiles.keys()) saveSource(path, { ...zipSource, entry: path }).catch(() => {});
 			await loadScene(scene, (path) => findAssetFile(zipFiles, path));
 			setErrorMsg("");
+			// after a reload the files are read again from this zip
+			await saveImportedZip(zipFile, [...zipFiles.keys()]).catch((err) => setErrorMsg("The zip is not kept for a reload: " + err.message));
 		} catch (err) {
 			setErrorMsg("Scene import error: " + err.message);
 		}
 	};
 
-	const newScene = async () => {
+	const resetScene = async () => {
 		if (elementsRef.current.length > 0 && !window.confirm("Remove every element from the scene?")) return;
 		await loadScene({ elements: [] }, () => null);
 		assetsRef.current = new Map();
+		// the kept zip and file places go too, so old files do not come back after a reload
+		await clearSavedFiles().catch(() => {});
 	};
 
 	const moveElement = (id, step) => {
@@ -1767,10 +1770,10 @@ export default function Constructor({ styles, active }) {
 					<div style={styles.addButtons}>
 						<button style={styles.addButton} onClick={exportScene} title="scene.json with every file of the scene">Export .zip</button>
 						<button style={styles.addButton} onClick={() => pickFiles(".zip", importScene)}>Import .zip</button>
+						<button style={{ ...styles.addButton, gridColumn: "1 / -1" }} onClick={resetScene} title="Removes every element and the files kept for a reload">Clear scene</button>
 					</div>
 					<div style={{ ...styles.fieldRow, opacity: 0.7 }}>
-						<span style={{ flex: 1 }}>{canKeepFileAccess() ? "Autosaved; files are read again from where you picked them" : "Autosaved in this browser (file names only)"}</span>
-						<button style={styles.queueClearButton} onClick={newScene}>New</button>
+						{canKeepFileAccess() ? "Autosaved; files are read again from where you picked them, an imported zip is kept whole" : "Autosaved in this browser; an imported zip is kept whole, other files by name only"}
 					</div>
 					{filesToAllow.length > 0 && (
 						<div style={styles.trackItem}>
